@@ -15,6 +15,10 @@ ACK_FLAG = 0x1
 RET_FLAG = 0x2
 TRUNC_FLAG = 0x3
 
+# TODO: FIB, CS (Dict), Packet objects, Routes, Neighbor Table, 
+# Next hops, Fragmentation, 
+# Timestamps for receiving packets
+
 def create_interest_packet(seq_num, name, flags=0x0):
     packet_type = INTEREST
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
