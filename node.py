@@ -2,8 +2,10 @@ import socket
 import threading
 import struct
 import time
+from DataPacket import DataPacket
+from InterestPacket import InterestPacket
+from Packet import Packet
 from datetime import datetime
-
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -21,6 +23,8 @@ TRUNC_FLAG = 0x3
 # TODO: FIB, CS (Dict), Packet objects, Routes, Neighbor Table, 
 # Next hops, Fragmentation, 
 # Timestamps for receiving packets
+
+# Will add hop count for neighbor discovery later
 
 def create_interest_packet(seq_num, name, flags=0x0):
     packet_type = INTEREST
@@ -86,41 +90,6 @@ def parse_data_packet(packet):
         "Payload": payload.decode("utf-8", errors="ignore"),
     }
 
-class Packet:
-    def __init__(self, packet_type, flags, seq_num, timestamp=None):
-        self.packet_type = packet_type
-        self.flags = flags
-        self.seq_num = seq_num
-        self.timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-
-    def __repr__(self):
-        return f"<Packet type={self.packet_type} seq={self.seq_num} flags={self.flags} ts={self.timestamp}>"
-
-class InterestPacket(Packet):
-    def __init__(self, seq_num, name, flags=0x0, timestamp=None):
-        super().__init__(INTEREST, flags, seq_num, timestamp)
-        self.name = name
-        self.name_length = len(name.encode("utf-8"))
-
-    def __repr__(self):
-        return (f"<InterestPacket PacketType={self.packet_type} Flags={self.flags} "
-                f"SequenceNumber={self.seq_num} NameLength={self.name_length} "
-                f"Name={self.name} Timestamp={self.timestamp}>")
-
-class DataPacket(Packet):
-    def __init__(self, seq_num, name, payload, flags=0x0, timestamp=None):
-        super().__init__(DATA, flags, seq_num, timestamp)
-        self.name = name
-        self.name_length = len(name.encode("utf-8"))
-        self.payload = payload
-        self.payload_size = len(payload.encode("utf-8")) if isinstance(payload, str) else len(payload)
-
-    def __repr__(self):
-        return (f"<DataPacket PacketType={self.packet_type} Flags={self.flags} "
-                f"SequenceNumber={self.seq_num} PayloadSize={self.payload_size} "
-                f"NameLength={self.name_length} Name={self.name} "
-                f"Payload={self.payload} Timestamp={self.timestamp}>")
-
 class Node:
     def __init__(self, name, host="127.0.0.1", port=0):
         self.name = name
@@ -129,6 +98,13 @@ class Node:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((self.host, self.port))
         self.neighbor_table = {}
+
+        # Tables
+        self.fib = {}
+        self.cs = {}
+        self.pit = {}
+        self.fib_interfaces = []
+        self.pit_interfaces = []
 
         print(f"[{self.name}] Node started at {self.host}:{self.port}")
 
@@ -166,6 +142,11 @@ class Node:
         self.sock.sendto(pkt, target)
         print(f"[{self.name}] Sent DATA packet to {target}")
         return pkt
+    
+    def forward_interest(self, pkt_obj, target=("127.0.0.1", 0)):
+        #pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
+        #self.sock.sendto(pkt, target)
+        print(f"[{self.name}] Forwarded INTEREST packet to {target}")
 
     def receive_packet(self, packet, addr=None):
         # Peek packet type
@@ -187,6 +168,36 @@ class Node:
             print(f"[{self.name}] Received INTEREST from {addr} at {timestamp}")
             print(f"  Parsed: {parsed}")
             print(f"  Object: {pkt_obj}")
+
+            # Check tables
+            table, data = self.check_tables(parsed["Name"])
+            #print("Table: " + str(table) + " Data: " + str(data))
+
+            if table == "CS":
+                print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
+                self.send_data(
+                    seq_num=pkt_obj.seq_num,
+                    name=pkt_obj.name,
+                    payload=data,
+                    flags=ACK_FLAG,
+                    target=addr
+                )
+
+            if pkt_obj.name not in self.pit:
+                self.pit_interfaces.append(addr[1])
+                self.pit[pkt_obj.name] = list(self.pit_interfaces)
+                print(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
+            elif pkt_obj.name in self.pit and addr[1] not in self.pit_interfaces:
+                self.pit_interfaces.append(addr[1])
+                self.pit[pkt_obj.name] = list(self.pit_interfaces)
+                print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
+
+            if table == "FIB":
+                if pkt_obj.name in self.fib:
+                    for interface in self.fib[pkt_obj.name]['Interfaces']:
+                        print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to interface: {interface}")
+                        self.forward_interest(pkt_obj, ("127.0.0.1", interface))
+
             return pkt_obj
         elif packet_type == DATA:  # Data
             parsed = parse_data_packet(packet)
@@ -220,4 +231,45 @@ class Node:
     
     def stop(self):
         self.running = False
+        try:
+            self.sock.sendto(b"", (self.host, self.port))
+        except Exception:
+            pass
+        time.sleep(0.1)
         self.sock.close()
+
+    def add_fib(self, name, interface, exp_time):
+        self.fib_interfaces.append(interface)
+        self.fib[name] = {
+            "Interfaces": list(self.fib_interfaces),
+            "ExpirationTime": exp_time
+        }
+
+    def remove_fib(self, name):
+        if name in self.fib:
+            del self.fib[name]
+
+    def add_cs(self, name, data):
+        self.cs[name] = data
+
+    def remove_cs(self, name):
+        if name in self.cs:
+            del self.cs[name]
+
+    def add_pit(self, name, interface):
+        self.pit_interfaces.append(interface)
+        self.pit[name] = (list(self.pit_interfaces))
+
+    def remove_pit(self, name):
+        if name in self.pit:
+            del self.pit[name]
+
+    def check_tables(self, name):
+        if name in self.cs:
+            return "CS", self.cs[name]
+        elif name in self.pit:
+            return "PIT", self.pit[name]
+        elif name in self.fib:
+            return "FIB", self.fib[name]
+        else:
+            return None, None

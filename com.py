@@ -19,10 +19,15 @@ if __name__ == "__main__":
     nodeB = Node("NodeB", port=5002)
 
     # NodeA sends interest to NodeB
+    #nodeB.add_cs("sensor/data", "Temperature: 28C")
+    #print(nodeB.cs)
+    
+    nodeB.add_fib("sensor/data", "eth0", 30)
+    print(nodeB.fib)
     nodeA.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
 
     # NodeB replies with data
-    nodeB.send_data(seq_num=2, name="sensor/data", payload="Temperature: 28C", flags=ACK_FLAG, target=("127.0.0.1", 5001))
+    # nodeB.send_data(seq_num=2, name="sensor/data", payload="Temperature: 28C", flags=ACK_FLAG, target=("127.0.0.1", 5001))
 
     time.sleep(2)
 
