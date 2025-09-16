@@ -1,6 +1,9 @@
 import socket
 import threading
 import struct
+import time
+from datetime import datetime
+
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -54,11 +57,11 @@ def parse_interest_packet(packet):
     flags = packet_type_flags & 0xF
 
     return {
-        "packet_type": packet_type,
-        "flags": flags,
-        "seq_num": seq_num,
-        "name_length": name_length,
-        "name": name
+        "PacketType": packet_type,
+        "Flags": flags,
+        "SequenceNumber": seq_num,
+        "NameLength": name_length,
+        "Name": name,
     }
 
 def parse_data_packet(packet):
@@ -74,14 +77,49 @@ def parse_data_packet(packet):
     flags = packet_type_flags & 0xF
 
     return {
-        "packet_type": packet_type,
-        "flags": flags,
-        "seq_num": seq_num,
-        "payload_size": payload_size,
-        "name_length": name_length,
-        "name": name,
-        "payload": payload.decode("utf-8", errors="ignore")
+        "PacketType": packet_type,
+        "Flags": flags,
+        "SequenceNumber": seq_num,
+        "PayloadSize": payload_size,
+        "NameLength": name_length,
+        "Name": name,
+        "Payload": payload.decode("utf-8", errors="ignore"),
     }
+
+class Packet:
+    def __init__(self, packet_type, flags, seq_num, timestamp=None):
+        self.packet_type = packet_type
+        self.flags = flags
+        self.seq_num = seq_num
+        self.timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    def __repr__(self):
+        return f"<Packet type={self.packet_type} seq={self.seq_num} flags={self.flags} ts={self.timestamp}>"
+
+class InterestPacket(Packet):
+    def __init__(self, seq_num, name, flags=0x0, timestamp=None):
+        super().__init__(INTEREST, flags, seq_num, timestamp)
+        self.name = name
+        self.name_length = len(name.encode("utf-8"))
+
+    def __repr__(self):
+        return (f"<InterestPacket PacketType={self.packet_type} Flags={self.flags} "
+                f"SequenceNumber={self.seq_num} NameLength={self.name_length} "
+                f"Name={self.name} Timestamp={self.timestamp}>")
+
+class DataPacket(Packet):
+    def __init__(self, seq_num, name, payload, flags=0x0, timestamp=None):
+        super().__init__(DATA, flags, seq_num, timestamp)
+        self.name = name
+        self.name_length = len(name.encode("utf-8"))
+        self.payload = payload
+        self.payload_size = len(payload.encode("utf-8")) if isinstance(payload, str) else len(payload)
+
+    def __repr__(self):
+        return (f"<DataPacket PacketType={self.packet_type} Flags={self.flags} "
+                f"SequenceNumber={self.seq_num} PayloadSize={self.payload_size} "
+                f"NameLength={self.name_length} Name={self.name} "
+                f"Payload={self.payload} Timestamp={self.timestamp}>")
 
 class Node:
     def __init__(self, name, host="127.0.0.1", port=0):
@@ -131,15 +169,35 @@ class Node:
     def receive_packet(self, packet, addr=None):
         # Peek packet type
         packet_type = (packet[0] >> 4) & 0xF
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") #time received
 
-        if packet_type == 0x1:  # Interest
+        if packet_type == INTEREST:  # Interest
             parsed = parse_interest_packet(packet)
-            print(f"[{self.name}] Received INTEREST from {addr}: {parsed}")
-        elif packet_type == 0x2:  # Data
+            pkt_obj = InterestPacket(
+                seq_num=parsed["SequenceNumber"],
+                name=parsed["Name"],
+                flags=parsed["Flags"],
+                timestamp=timestamp
+            )
+            print(f"[{self.name}] Received INTEREST from {addr}")
+            print(f"  Parsed: {parsed}")
+            print(f"  Object: {pkt_obj}")
+            return pkt_obj
+        elif packet_type == DATA:  # Data
             parsed = parse_data_packet(packet)
-            print(f"[{self.name}] Received DATA from {addr}: {parsed}")
+            pkt_obj = DataPacket(
+                seq_num=parsed["SequenceNumber"],
+                name=parsed["Name"],
+                payload=parsed["Payload"],
+                flags=parsed["Flags"],
+                timestamp=timestamp
+            )
+            print(f"[{self.name}] Received DATA from {addr}")
+            print(f"  Parsed: {parsed}")
+            print(f"  Object: {pkt_obj}")
+            return pkt_obj
         else:
-            print(f"[{self.name}] Unknown packet type {packet_type} from {addr}")
+            print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
 
     def stop(self):
         self.running = False
