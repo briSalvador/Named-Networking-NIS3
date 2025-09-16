@@ -1,4 +1,5 @@
 from node import Node
+import time
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -22,6 +23,13 @@ if __name__ == "__main__":
 
     # NodeB replies with data
     nodeB.send_data(seq_num=2, name="sensor/data", payload="Temperature: 28C", flags=ACK_FLAG, target=("127.0.0.1", 5001))
+
+    time.sleep(2)
+
+    # neighbor tables
+    print("\n--- Neighbor Tables ---")
+    print("NodeA neighbors:", nodeA.get_neighbors())
+    print("NodeB neighbors:", nodeB.get_neighbors())
 
     # Keep running
     import time
