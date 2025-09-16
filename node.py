@@ -128,6 +128,7 @@ class Node:
         self.port = port if port != 0 else self._get_free_port()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((self.host, self.port))
+        self.neighbor_table = {}
 
         print(f"[{self.name}] Node started at {self.host}:{self.port}")
 
@@ -171,6 +172,10 @@ class Node:
         packet_type = (packet[0] >> 4) & 0xF
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") #time received
 
+        if addr:
+            self.neighbor_table[addr] = timestamp
+            print(f"[{self.name}] Neighbor Table updated: {self.neighbor_table}")
+
         if packet_type == INTEREST:  # Interest
             parsed = parse_interest_packet(packet)
             pkt_obj = InterestPacket(
@@ -198,7 +203,21 @@ class Node:
             return pkt_obj
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
+    
+    def get_neighbors(self):
+        return self.neighbor_table
 
+    def remove_stale_neighbors(self, timeout=30):
+        now = datetime.now()
+        stale = []
+        for addr, ts in self.neighbor_table.items():
+            last_seen = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S.%f")
+            if (now - last_seen).total_seconds() > timeout:
+                stale.append(addr)
+        for addr in stale:
+            del self.neighbor_table[addr]
+            print(f"[{self.name}] Removed stale neighbor {addr}") 
+    
     def stop(self):
         self.running = False
         self.sock.close()
