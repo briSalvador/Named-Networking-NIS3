@@ -179,7 +179,7 @@ class Node:
                 flags=parsed["Flags"],
                 timestamp=timestamp
             )
-            print(f"[{self.name}] Received INTEREST from {addr}")
+            print(f"[{self.name}] Received INTEREST from {addr} at {timestamp}")
             print(f"  Parsed: {parsed}")
             print(f"  Object: {pkt_obj}")
             return pkt_obj
@@ -192,7 +192,7 @@ class Node:
                 flags=parsed["Flags"],
                 timestamp=timestamp
             )
-            print(f"[{self.name}] Received DATA from {addr}")
+            print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
             print(f"  Parsed: {parsed}")
             print(f"  Object: {pkt_obj}")
             return pkt_obj
