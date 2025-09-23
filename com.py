@@ -17,17 +17,27 @@ TRUNC_FLAG = 0x3
 if __name__ == "__main__":
     nodeA = Node("NodeA", port=5001)
     nodeB = Node("NodeB", port=5002)
+    nodeC = Node("NodeC", port=5003)
 
     # NodeA sends interest to NodeB
     #nodeB.add_cs("sensor/data", "Temperature: 28C")
     #print(nodeB.cs)
     
-    nodeB.add_fib("sensor/data", "eth0", 30)
-    print(nodeB.fib)
-    nodeA.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
+    # nodeB.add_fib("sensor/data", "eth0", 30)
+    
+    # print(nodeB.fib)
+    # nodeA.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
 
     # NodeB replies with data
     # nodeB.send_data(seq_num=2, name="sensor/data", payload="Temperature: 28C", flags=ACK_FLAG, target=("127.0.0.1", 5001))
+
+    nodeC.add_cs("sensor/data", "Temperature: 28C")
+
+    # NodeA -> NodeB, NodeB -> NodeC
+    nodeA.add_fib("sensor/data", 5002, 30)
+    nodeB.add_fib("sensor/data", 5003, 30)
+
+    nodeA.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
 
     time.sleep(2)
 
@@ -35,12 +45,13 @@ if __name__ == "__main__":
     print("\n--- Neighbor Tables ---")
     print("NodeA neighbors:", nodeA.get_neighbors())
     print("NodeB neighbors:", nodeB.get_neighbors())
+    print("NodeC neighbors:", nodeC.get_neighbors())
 
     # Keep running
-    import time
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         nodeA.stop()
         nodeB.stop()
+        nodeC.stop()
