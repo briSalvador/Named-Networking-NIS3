@@ -185,8 +185,11 @@ class Node:
                 self.sock.sendto(pkt, ("127.0.0.1", port))
                 print(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
         else:
-            # Direct forwarding (legacy)
+            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
+            self.sock.sendto(pkt, target)
             print(f"[{self.name}] Forwarded INTEREST packet to {target}")
+            # Direct forwarding (legacy)
+            # print(f"[{self.name}] Forwarded INTEREST packet to {target}")
 
     def receive_packet(self, packet, addr=None):
         # Peek packet type
