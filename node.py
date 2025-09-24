@@ -38,9 +38,7 @@ def create_interest_packet(seq_num, name, flags=0x0):
     packet = header + name_bytes
     return packet
 
-FRAGMENT_SIZE = 1500
-
-def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_fragments=1):
+def create_data_packet(seq_num, name, payload, flags=0x0):
     packet_type = DATA
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
 
@@ -51,8 +49,7 @@ def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_
     payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
     payload_size = len(payload_bytes) & 0xFF
 
-    # Add fragment info (fragment_num, total_fragments)
-    header = struct.pack("!BBBBBB", packet_type_flags, seq_num, payload_size, name_length, fragment_num, total_fragments)
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, payload_size, name_length)
     packet = header + name_bytes + payload_bytes
     return packet
 
@@ -72,12 +69,14 @@ def parse_interest_packet(packet):
     }
 
 def parse_data_packet(packet):
-    # Unpack fragment info
-    packet_type_flags, seq_num, payload_size, name_length, fragment_num, total_fragments = struct.unpack("!BBBBBB", packet[:6])
-    name_start = 6
+    packet_type_flags, seq_num, payload_size, name_length = struct.unpack("!BBBB", packet[:4])
+
+    name_start = 4
     name_end = name_start + name_length
     name = packet[name_start:name_end].decode("utf-8")
+
     payload = packet[name_end:name_end + payload_size]
+
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
 
@@ -89,33 +88,112 @@ def parse_data_packet(packet):
         "NameLength": name_length,
         "Name": name,
         "Payload": payload.decode("utf-8", errors="ignore"),
-        "FragmentNum": fragment_num,
-        "TotalFragments": total_fragments,
+    }
+
+# ---------------- HELLO / UPDATE Packets ----------------
+def create_hello_packet(name):
+    packet_type = HELLO
+    flags = 0x0
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes)
+
+    header = struct.pack("!BB", packet_type_flags, name_length)
+    packet = header + name_bytes
+    return packet
+
+def parse_hello_packet(packet):
+    packet_type_flags, name_length = struct.unpack("!BB", packet[:2])
+    name = packet[2:2 + name_length].decode("utf-8")
+
+    return {
+        "PacketType": (packet_type_flags >> 4) & 0xF,
+        "Flags": packet_type_flags & 0xF,
+        "NameLength": name_length,
+        "Name": name
+    }
+
+def create_update_packet(name):
+    packet_type = UPDATE
+    flags = 0x0
+    packet_type_flags = (packet_type << 4) | flags
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes)
+    header = struct.pack("!BB", packet_type_flags, name_length)
+    return header + name_bytes
+
+def parse_update_packet(packet):
+    packet_type_flags, name_length = struct.unpack("!BB", packet[:2])
+    name = packet[2:2+name_length].decode("utf-8")
+    return {
+        "PacketType": (packet_type_flags >> 4) & 0xF,
+        "Flags": packet_type_flags & 0xF,
+        "Name": name
     }
 
 class Node:
-    def __init__(self, name, host="127.0.0.1", port=0):
+    def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999):
         self.name = name
         self.host = host
         self.port = port if port != 0 else self._get_free_port()
+        self.broadcast_port = broadcast_port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((self.host, self.port))
+        self.broadcast_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.broadcast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.broadcast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.broadcast_sock.bind((self.host, self.broadcast_port))
         self.neighbor_table = {}
 
         # Tables
-        self.fib = {}  # {name: {"NextHops": [port, ...], "ExpirationTime": ...}}
+        self.fib = {}
         self.cs = {}
         self.pit = {}
-        self.fragment_buffer = {}
         self.fib_interfaces = []
         self.pit_interfaces = []
 
-        print(f"[{self.name}] Node started at {self.host}:{self.port}")
+        print(f"[{self.name}] Node started at {self.host}:{self.port} and listening for broadcasts on port {self.broadcast_port}")
 
-        # Start background thread for listening
+        # Start background threads for listening
         self.running = True
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
         self.listener_thread.start()
+
+        """ self.broadcast_listener_thread = threading.Thread(target=self._listen_broadcast, daemon=True)
+        self.broadcast_listener_thread.start()
+
+        self.hello_interval = 5
+        self.broadcast_sender_thread = threading.Thread(target=self._send_hello_loop, daemon=True)
+        self.broadcast_sender_thread.start() """
+
+    def _listen_broadcast(self):
+        while self.running:
+            try:
+                data, addr = self.broadcast_sock.recvfrom(4096)
+                self.receive_packet(data, addr)
+            except Exception as e:
+                print(f"[{self.name}] Broadcast listener stopped: {e}")
+                break
+
+    def start_neighbor_discovery(self, interval=10):
+        def _send_hello_loop():
+            while self.running:
+                self.send_broadcast_hello()
+                time.sleep(interval)
+        t = threading.Thread(target=_send_hello_loop, daemon=True)
+        t.start()
+        return t
+
+    def _send_hello_loop(self):
+        while self.running:
+            try:
+                pkt = create_hello_packet(self.name)
+                self.sock.sendto(pkt, ("127.0.0.1", self.broadcast_port))
+                #print(f"[{self.name}] Broadcast HELLO")
+            except Exception as e:
+                print(f"[{self.name}] HELLO send failed: {e}")
+            time.sleep(self.hello_interval)
 
     def _get_free_port(self):
         """Find a free port if not specified."""
@@ -142,54 +220,15 @@ class Node:
         return pkt
 
     def send_data(self, seq_num, name, payload, flags=0x0, target=("127.0.0.1", 0)):
-        payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
-        max_payload_per_packet = FRAGMENT_SIZE - (6 + len(name.encode("utf-8")))  # header + name
-        total_fragments = (len(payload_bytes) + max_payload_per_packet - 1) // max_payload_per_packet
-
-        if len(payload_bytes) > max_payload_per_packet:
-            # Fragmentation needed
-            for i in range(total_fragments):
-                frag_payload = payload_bytes[i*max_payload_per_packet:(i+1)*max_payload_per_packet]
-                pkt = create_data_packet(seq_num, name, frag_payload, flags | TRUNC_FLAG, i+1, total_fragments)
-                self.sock.sendto(pkt, target)
-                print(f"[{self.name}] Sent DATA fragment {i+1}/{total_fragments} to {target}")
-        else:
-            pkt = create_data_packet(seq_num, name, payload, flags, 1, 1)
-            self.sock.sendto(pkt, target)
-            print(f"[{self.name}] Sent DATA packet to {target}")
-        return True
+        pkt = create_data_packet(seq_num, name, payload, flags)
+        self.sock.sendto(pkt, target)
+        print(f"[{self.name}] Sent DATA packet to {target}")
+        return pkt
     
-    def add_fib(self, name, interface, exp_time):
-        # interface is the next hop port (int)
-        if name not in self.fib:
-            self.fib[name] = {
-                "NextHops": [],
-                "ExpirationTime": exp_time
-            }
-        if interface not in self.fib[name]["NextHops"]:
-            self.fib[name]["NextHops"].append(interface)
-        print(f"[{self.name}] FIB updated: {self.fib}")
-
-    def get_next_hops(self, name):
-        """Return a list of next hop ports for a given name/prefix."""
-        if name in self.fib:
-            return self.fib[name]["NextHops"]
-        return []
-
-    def forward_interest(self, pkt_obj, target=None):
-        # If target is None, use FIB to determine next hops
-        if target is None:
-            next_hops = self.get_next_hops(pkt_obj.name)
-            for port in next_hops:
-                pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
-                self.sock.sendto(pkt, ("127.0.0.1", port))
-                print(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
-        else:
-            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
-            self.sock.sendto(pkt, target)
-            print(f"[{self.name}] Forwarded INTEREST packet to {target}")
-            # Direct forwarding (legacy)
-            # print(f"[{self.name}] Forwarded INTEREST packet to {target}")
+    def forward_interest(self, pkt_obj, target=("127.0.0.1", 0)):
+        #pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
+        #self.sock.sendto(pkt, target)
+        print(f"[{self.name}] Forwarded INTEREST packet to {target}")
 
     def receive_packet(self, packet, addr=None):
         # Peek packet type
@@ -236,11 +275,10 @@ class Node:
                 print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
             if table == "FIB":
-                # Use next hop(s) from FIB
-                next_hops = self.get_next_hops(pkt_obj.name)
-                for port in next_hops:
-                    print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {port}")
-                    self.forward_interest(pkt_obj, ("127.0.0.1", port))
+                if pkt_obj.name in self.fib:
+                    for interface in self.fib[pkt_obj.name]['Interfaces']:
+                        print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to interface: {interface}")
+                        self.forward_interest(pkt_obj, ("127.0.0.1", interface))
 
             return pkt_obj
         elif packet_type == DATA:  # Data
@@ -252,23 +290,30 @@ class Node:
                 flags=parsed["Flags"],
                 timestamp=timestamp
             )
-            # Fragmentation handling
-            frag_key = (parsed["SequenceNumber"], parsed["Name"])
-            if parsed["TotalFragments"] > 1:
-                if frag_key not in self.fragment_buffer:
-                    self.fragment_buffer[frag_key] = [None] * parsed["TotalFragments"]
-                self.fragment_buffer[frag_key][parsed["FragmentNum"]-1] = parsed["Payload"]
-                print(f"[{self.name}] Received DATA fragment {parsed['FragmentNum']}/{parsed['TotalFragments']} from {addr}")
-                if all(frag is not None for frag in self.fragment_buffer[frag_key]):
-                    # All fragments received, reassemble
-                    full_payload = ''.join(self.fragment_buffer[frag_key])
-                    print(f"[{self.name}] All fragments received. Reassembled payload: {full_payload}")
-                    del self.fragment_buffer[frag_key]
-            else:
-                print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
-                print(f"  Parsed: {parsed}")
-                print(f"  Object: {pkt_obj}")
+            print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
+            print(f"  Parsed: {parsed}")
+            print(f"  Object: {pkt_obj}")
             return pkt_obj
+        elif packet_type == HELLO:
+            parsed = parse_hello_packet(packet)
+            neighbor_name = parsed["Name"]
+            print(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
+
+            # Add neighbor to FIB
+            self.add_fib(neighbor_name, addr[1], exp_time=5000)
+
+            # Send UPDATE back
+            update_pkt = create_update_packet(self.name)
+            self.sock.sendto(update_pkt, addr)
+            print(f"[{self.name}] Sent UPDATE back to {neighbor_name} at {addr}")
+        elif packet_type == UPDATE:
+            parsed = parse_update_packet(packet)
+            neighbor_name = parsed["Name"]
+            print(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr}")
+
+            # Add/update FIB
+            self.add_fib(neighbor_name, addr[1], exp_time=5000)
+            print(f"[{self.name}] Updated FIB with neighbor {neighbor_name} on {addr}")
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
     
@@ -296,15 +341,11 @@ class Node:
         self.sock.close()
 
     def add_fib(self, name, interface, exp_time):
-        # interface is the next hop port (int)
-        if name not in self.fib:
-            self.fib[name] = {
-                "NextHops": [],
-                "ExpirationTime": exp_time
-            }
-        if interface not in self.fib[name]["NextHops"]:
-            self.fib[name]["NextHops"].append(interface)
-        print(f"[{self.name}] FIB updated: {self.fib}")
+        self.fib_interfaces.append(interface)
+        self.fib[name] = {
+            "Interfaces": list(self.fib_interfaces),
+            "ExpirationTime": exp_time
+        }
 
     def remove_fib(self, name):
         if name in self.fib:

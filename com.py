@@ -20,7 +20,7 @@ if __name__ == "__main__":
     nodeC = Node("NodeC", port=5003)
 
     # NodeA sends interest to NodeB
-    #nodeB.add_cs("sensor/data", "Temperature: 28C")
+    nodeB.add_cs("sensor/data", "Temperature: 28C")
     #print(nodeB.cs)
     
     # nodeB.add_fib("sensor/data", "eth0", 30)
@@ -42,10 +42,10 @@ if __name__ == "__main__":
     time.sleep(2)
 
     # neighbor tables
-    print("\n--- Neighbor Tables ---")
+    """ print("\n--- Neighbor Tables ---")
     print("NodeA neighbors:", nodeA.get_neighbors())
     print("NodeB neighbors:", nodeB.get_neighbors())
-    print("NodeC neighbors:", nodeC.get_neighbors())
+    print("NodeC neighbors:", nodeC.get_neighbors()) """
 
     # Keep running
     try:
