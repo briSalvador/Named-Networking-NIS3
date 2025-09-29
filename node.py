@@ -20,11 +20,9 @@ ACK_FLAG = 0x1
 RET_FLAG = 0x2
 TRUNC_FLAG = 0x3
 
-# TODO: FIB, CS (Dict), Packet objects, Routes, Neighbor Table, 
-# Next hops, Fragmentation, 
-# Timestamps for receiving packets
-
-# Will add hop count for neighbor discovery later
+# TODO (As of Sep 30): 
+# FIB: Add hop count for FIB entries so that new routes are compared with existing ones and replaced
+# if new route is shorter.
 
 def create_interest_packet(seq_num, name, flags=0x0):
     packet_type = INTEREST
@@ -133,6 +131,29 @@ def parse_update_packet(packet):
     }
 
 class Node:
+    def load_neighbors_from_file(self, filename):
+        try:
+            with open(filename, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or ':' not in line:
+                        continue
+                    node_name, ports_str = line.split(':', 1)
+                    node_name = node_name.strip()
+                    if node_name == self.name:
+                        ports = [p.strip() for p in ports_str.split(',') if p.strip()]
+                        for port in ports:
+                            #self.add_neighbor(self.host, int(port))
+                            try:
+                                pkt = create_hello_packet(self.name)
+                                self.sock.sendto(pkt, (self.host, int(port)))
+                                print(f"[{self.name}] Sent HELLO packet to {self.host}:{port}")
+                            except Exception as e:
+                                print(f"[{self.name}] Error sending HELLO packet to {self.host}:{port}: {e}")
+                        print(f"[{self.name}] Loaded neighbors from {filename}: {ports}")
+        except Exception as e:
+            print(f"[{self.name}] Error loading neighbors from {filename}: {e}")
+
     def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999):
         self.name = name
         self.host = host
@@ -153,7 +174,7 @@ class Node:
         self.fib_interfaces = []
         self.pit_interfaces = []
 
-        print(f"[{self.name}] Node started at {self.host}:{self.port} and listening for broadcasts on port {self.broadcast_port}")
+        #print(f"[{self.name}] Node started at {self.host}:{self.port} and listening for broadcasts on port {self.broadcast_port}")
 
         # Start background threads for listening
         self.running = True
@@ -237,7 +258,7 @@ class Node:
 
         if addr:
             self.neighbor_table[addr] = timestamp
-            print(f"[{self.name}] Neighbor Table updated: {self.neighbor_table}")
+            #print(f"[{self.name}] Neighbor Table updated: {self.neighbor_table}")
 
         if packet_type == INTEREST:  # Interest
             parsed = parse_interest_packet(packet)
@@ -247,7 +268,7 @@ class Node:
                 flags=parsed["Flags"],
                 timestamp=timestamp
             )
-            print(f"[{self.name}] Received INTEREST from {addr} at {timestamp}")
+            print(f"[{self.name}] Received INTEREST from port {addr[1]} at {timestamp}")
             print(f"  Parsed: {parsed}")
             print(f"  Object: {pkt_obj}")
 
@@ -375,3 +396,12 @@ class Node:
             return "FIB", self.fib[name]
         else:
             return None, None
+        
+    def add_neighbor(self, addr, port):
+        key = (addr, port)
+        if key not in self.neighbor_table:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.neighbor_table[key] = timestamp
+            print(f"[{self.name}] Added neighbor {key} to neighbor_table.")
+        else:
+            print(f"[{self.name}] Neighbor {key} already exists in neighbor_table.")
