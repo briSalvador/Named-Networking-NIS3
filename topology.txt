@@ -1,0 +1,6 @@
+/DLSU/Andrew: /DLSU/Gokongwei, /DLSU/Henry, /DLSU/Andrew/PC1
+/DLSU/Gokongwei: /DLSU/Andrew, /DLSU/Miguel
+/DLSU/Miguel: /DLSU/Gokongwei, /DLSU/Miguel/cam1
+/DLSU/Henry: /DLSU/Andrew
+/DLSU/Andrew/PC1: /DLSU/Andrew
+/DLSU/Miguel/cam1: /DLSU/Miguel
