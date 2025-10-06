@@ -44,8 +44,6 @@ if __name__ == "__main__":
     for node in nodes:
         node.load_neighbors_from_file("neighbors.txt")
 
-    ns.load_neighbors_from_file("neighbors.txt")
-
     # NodeA sends interest to NodeB
     """ nodeB.add_cs("sensor/data", "Temperature: 28C")
     nodeC.add_cs("sensor/data", "Temperature: 28C") """
