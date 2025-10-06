@@ -18,6 +18,7 @@ TRUNC_FLAG = 0x3
 # Make border router nodes be able to have multiple names
 
 if __name__ == "__main__":
+    dname = Node("/DLSU/NameServer1", port=5000)
     dpc1 = Node("/DLSU/Andrew/PC1", port=5001)
     andrew = Node("/DLSU/Andrew", port=5002)
     goks = Node("/DLSU/Gokongwei", port=5003)
@@ -37,7 +38,7 @@ if __name__ == "__main__":
     upc1 = Node("/UP/Salcedo/PC1", port=5017)
 
 
-    nodes =[dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1]
+    nodes =[dname, dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1]
 
     # load all nodes
     for node in nodes:

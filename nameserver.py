@@ -212,7 +212,7 @@ class NameServer:
         self.sock.close()
 
 if __name__ == "__main__":
-    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt")
+    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="topology.txt")
     try:
         while True:
             pass

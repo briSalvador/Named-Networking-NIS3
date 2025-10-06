@@ -1,3 +1,4 @@
+/DLSU/NameServer1: /DLSU/Henry, /DLSU/Miguel
 /DLSU/Andrew/PC1: /DLSU/Andrew
 /DLSU/Andrew: /DLSU/Gokongwei, /DLSU/Router1, /DLSU/Andrew/PC1
 /DLSU/Gokongwei: /DLSU/Andrew, /DLSU, /DLSU/Henry
