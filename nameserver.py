@@ -1,6 +1,7 @@
 import socket
 import struct
 import threading
+from datetime import datetime
 from collections import deque, defaultdict
 
 INTEREST = 0x1
@@ -51,6 +52,18 @@ def parse_hello_packet(packet):
         "Name": name
     }
 
+def create_hello_packet(name):
+    packet_type = HELLO
+    flags = 0x0
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes)
+
+    header = struct.pack("!BB", packet_type_flags, name_length)
+    packet = header + name_bytes
+    return packet
+
 def parse_update_packet(packet):
     packet_type_flags, name_length = struct.unpack("!BB", packet[:2])
     name = packet[2:2+name_length].decode("utf-8")
@@ -72,9 +85,10 @@ class NameServer:
 
         self.port_to_name = {}
         self.name_to_port = {}
+        self.neighbor_table = {}
 
         self.graph = defaultdict(set)
-        self._load_topology_file(self.topo_file)
+        #self._load_topology_file(self.topo_file)
 
         self.running = True
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
@@ -82,6 +96,29 @@ class NameServer:
 
         print(f"[NS {self.ns_name}] up at {self.host}:{self.port}")
         print(f"[NS {self.ns_name}] loaded topology with {len(self.graph)} nodes from {self.topo_file}")
+
+    def load_neighbors_from_file(self, filename):
+        try:
+            with open(filename, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or ':' not in line:
+                        continue
+                    node_name, ports_str = line.split(':', 1)
+                    node_name = node_name.strip()
+                    if node_name == self.ns_name:
+                        ports = [p.strip() for p in ports_str.split(',') if p.strip()]
+                        for port in ports:
+                            #self.add_neighbor(self.host, int(port))
+                            try:
+                                pkt = create_hello_packet(self.ns_name)
+                                self.sock.sendto(pkt, (self.host, int(port)))
+                                print(f"[{self.ns_name}] Sent HELLO packet to {self.host}:{port}")
+                            except Exception as e:
+                                print(f"[{self.ns_name}] Error sending HELLO packet to {self.host}:{port}: {e}")
+                        print(f"[{self.ns_name}] Loaded neighbors from {filename}: {ports}")
+        except Exception as e:
+            print(f"[{self.ns_name}] Error loading neighbors from {filename}: {e}")
 
     def _load_topology_file(self, path):
         try:
@@ -124,7 +161,11 @@ class NameServer:
         node_name = parsed["Name"]
         self.port_to_name[addr] = node_name
         self.name_to_port[node_name] = addr
-        print(f"[NS {self.ns_name}] HELLO from {node_name} at {addr}")
+
+        # Add to neighbor table
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") #time received
+        self.neighbor_table[node_name] = timestamp
+        print(f"[NS {self.ns_name}] HELLO from {node_name} at {addr} (added as neighbor)")
 
     def _handle_update(self, packet, addr):
         parsed = parse_update_packet(packet)
@@ -210,11 +251,14 @@ class NameServer:
         except Exception:
             pass
         self.sock.close()
+    
+    def get_neigbors(self):
+        return self.neighbor_table
 
-if __name__ == "__main__":
-    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="topology.txt")
+""" if __name__ == "__main__":
+    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt")
     try:
         while True:
             pass
     except KeyboardInterrupt:
-        ns.stop()
+        ns.stop() """

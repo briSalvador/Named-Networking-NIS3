@@ -256,8 +256,8 @@ class Node:
         packet_type = (packet[0] >> 4) & 0xF
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f") #time received
 
-        if addr:
-            self.neighbor_table[addr] = timestamp
+        #if addr:
+            #self.neighbor_table[addr] = timestamp
             #print(f"[{self.name}] Neighbor Table updated: {self.neighbor_table}")
 
         if packet_type == INTEREST:  # Interest
@@ -318,6 +318,7 @@ class Node:
         elif packet_type == HELLO:
             parsed = parse_hello_packet(packet)
             neighbor_name = parsed["Name"]
+            self.neighbor_table[neighbor_name] = timestamp
             print(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
 
             # Add neighbor to FIB
@@ -330,6 +331,7 @@ class Node:
         elif packet_type == UPDATE:
             parsed = parse_update_packet(packet)
             neighbor_name = parsed["Name"]
+            self.neighbor_table[neighbor_name] = timestamp
             print(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr}")
 
             # Add/update FIB

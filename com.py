@@ -1,4 +1,5 @@
 from node import Node
+from nameserver import NameServer
 import time
 
 # Packet Types (4 bits)
@@ -18,7 +19,7 @@ TRUNC_FLAG = 0x3
 # Make border router nodes be able to have multiple names
 
 if __name__ == "__main__":
-    dname = Node("/DLSU/NameServer1", port=5000)
+    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="topology.txt")
     dpc1 = Node("/DLSU/Andrew/PC1", port=5001)
     andrew = Node("/DLSU/Andrew", port=5002)
     goks = Node("/DLSU/Gokongwei", port=5003)
@@ -37,12 +38,13 @@ if __name__ == "__main__":
     lara = Node("/UP/Lara", port=5016)
     upc1 = Node("/UP/Salcedo/PC1", port=5017)
 
-
-    nodes =[dname, dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1]
+    nodes =[ns, dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1]
 
     # load all nodes
     for node in nodes:
         node.load_neighbors_from_file("neighbors.txt")
+
+    ns.load_neighbors_from_file("neighbors.txt")
 
     # NodeA sends interest to NodeB
     """ nodeB.add_cs("sensor/data", "Temperature: 28C")
@@ -52,7 +54,7 @@ if __name__ == "__main__":
     """ nodeA.add_fib("sensor/data", 5002, 30)
     nodeB.add_fib("sensor/data", 5003, 30) """
 
-    dpc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
+    #dpc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
 
     time.sleep(2)
 
@@ -61,6 +63,7 @@ if __name__ == "__main__":
     print("NodeA neighbors:", dpc1.get_neighbors())
     print("NodeB neighbors:", andrew.get_neighbors())
     print("NodeC neighbors:", henry.get_neighbors())
+    print("NameServer neighbors:", ns.get_neigbors())
 
     # Keep running
     try:
