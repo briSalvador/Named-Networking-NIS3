@@ -18,15 +18,26 @@ TRUNC_FLAG = 0x3
 # Make border router nodes be able to have multiple names
 
 if __name__ == "__main__":
-    pc1 = Node("/DLSU/Andrew/PC1", port=5001)
+    dpc1 = Node("/DLSU/Andrew/PC1", port=5001)
     andrew = Node("/DLSU/Andrew", port=5002)
     goks = Node("/DLSU/Gokongwei", port=5003)
     henry = Node("/DLSU/Henry", port=5004)
     dlsu = Node("/DLSU", port=5005)
     miguel = Node("/DLSU/Miguel", port=5006)
-    cam1 = Node("/DLSU/Miguel/cam1", port=5007)
+    dcam1 = Node("/DLSU/Miguel/cam1", port=5007)
+    dxa = Node("/DLSU/Router1", port=5008)
+    gonzaga = Node("/ADMU/Gonzaga", port=5009)
+    admu = Node("/ADMU", port=5010)
+    acam1 = Node("/ADMU/Gonzaga/cam1", port=5011)
+    kostka = Node("/ADMU/Kostka", port=5012)
+    axu = Node("/ADMU/Router2", port=5013)
+    up = Node("/UP", port=5014)
+    salcedo = Node("/UP/Salcedo", port=5015)
+    lara = Node("/UP/Lara", port=5016)
+    upc1 = Node("/UP/Salcedo/PC1", port=5017)
 
-    nodes =[pc1, andrew, goks, henry, dlsu, miguel, cam1]
+
+    nodes =[dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1]
 
     # load all nodes
     for node in nodes:
@@ -40,13 +51,13 @@ if __name__ == "__main__":
     """ nodeA.add_fib("sensor/data", 5002, 30)
     nodeB.add_fib("sensor/data", 5003, 30) """
 
-    pc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
+    dpc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
 
     time.sleep(2)
 
     # neighbor tables
     print("\n--- Neighbor Tables ---")
-    print("NodeA neighbors:", pc1.get_neighbors())
+    print("NodeA neighbors:", dpc1.get_neighbors())
     print("NodeB neighbors:", andrew.get_neighbors())
     print("NodeC neighbors:", henry.get_neighbors())
 
