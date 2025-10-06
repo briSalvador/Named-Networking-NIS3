@@ -130,6 +130,18 @@ def parse_update_packet(packet):
         "Name": name
     }
 
+def get_domains_from_name(node_name):
+    """
+    Returns a list of domains for a given node name.
+    For edge nodes, splits by space and gets the topmost layer for each part.
+    """
+    domains = []
+    for part in node_name.split(" "):
+        segments = part.strip().split("/")
+        if len(segments) > 1 and segments[1]:
+            domains.append(segments[1])
+    return domains
+
 class Node:
     def load_neighbors_from_file(self, filename):
         try:
@@ -156,6 +168,7 @@ class Node:
 
     def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999):
         self.name = name
+        self.domains = get_domains_from_name(name)
         self.host = host
         self.port = port if port != 0 else self._get_free_port()
         self.broadcast_port = broadcast_port
@@ -174,7 +187,7 @@ class Node:
         self.fib_interfaces = []
         self.pit_interfaces = []
 
-        #print(f"[{self.name}] Node started at {self.host}:{self.port} and listening for broadcasts on port {self.broadcast_port}")
+        print(f"[{self.name}] Node started at {self.host}:{self.port} in domain(s): {self.domains}")
 
         # Start background threads for listening
         self.running = True

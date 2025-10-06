@@ -6,12 +6,12 @@
 /DLSU: /DLSU/Gokongwei, /DLSU/Henry, /DLSU/Miguel
 /DLSU/Miguel: /DLSU, /DLSU/Henry, /DLSU/Miguel/cam1
 /DLSU/Miguel/cam1: /DLSU/Miguel
-/DLSU/Router1: /DLSU/Andrew, /DLSU/Gokongwei, /DLSU, /ADMU/Gonzaga, /ADMU
+/DLSU/Router1 /ADMU/Router1: /DLSU/Andrew, /DLSU/Gokongwei, /DLSU, /ADMU/Gonzaga, /ADMU
 /ADMU/Gonzaga: /DLSU/Router1, /ADMU, /ADMU/Gonzaga/cam1
 /ADMU: /DLSU/Router1, /ADMU/Gonzaga, /ADMU/Kostka, /ADMU/Router2
 /ADMU/Gonzaga/cam1: /ADMU/Gonzaga
 /ADMU/Kostka: /ADMU, /ADMU/Router2
-/ADMU/Router2: /ADMU, /ADMU/Kostka, /UP, /UP/Salcedo
+/ADMU/Router2 /UP/Router1: /ADMU, /ADMU/Kostka, /UP, /UP/Salcedo
 /UP: /ADMU/Router2, /UP/Salcedo, /UP/Lara
 /UP/Salcedo: /ADMU/Router2, /UP, /UP/Lara, /UP/Salcedo/PC1
 /UP/Lara: /UP, /UP/Salcedo
