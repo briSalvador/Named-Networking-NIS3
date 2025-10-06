@@ -38,13 +38,11 @@ if __name__ == "__main__":
     upc1 = Node("/UP/Salcedo/PC1", port=5017)
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt")
 
-    nodes =[dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1]
+    nodes =[dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns]
 
     # load all nodes
     for node in nodes:
         node.load_neighbors_from_file("neighbors.txt")
-
-    ns.load_neighbors_from_file("neighbors.txt")
 
     # NodeA sends interest to NodeB
     """ nodeB.add_cs("sensor/data", "Temperature: 28C")
