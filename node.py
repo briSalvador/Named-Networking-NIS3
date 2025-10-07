@@ -6,6 +6,7 @@ from DataPacket import DataPacket
 from InterestPacket import InterestPacket
 from Packet import Packet
 from datetime import datetime
+from collections import deque
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -187,12 +188,19 @@ class Node:
         self.fib_interfaces = []
         self.pit_interfaces = []
 
+
         print(f"[{self.name}] Node started at {self.host}:{self.port} in domain(s): {self.domains}")
 
         # Start background threads for listening
         self.running = True
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
         self.listener_thread.start()
+
+         # Buffer and Queueing (FIFO)
+        self.buffer = deque()  
+        self.buffer_lock = threading.Lock()
+        self.buffer_thread = threading.Thread(target=self._process_buffer_loop, daemon=True)
+        self.buffer_thread.start()
 
         """ self.broadcast_listener_thread = threading.Thread(target=self._listen_broadcast, daemon=True)
         self.broadcast_listener_thread.start()
@@ -247,6 +255,53 @@ class Node:
                 print(f"[{self.name}] Listener stopped: {e}")
                 break
 
+    # buffer and queueing
+    def add_to_buffer(self, packet, addr, reason="Unknown Destination"):
+        entry = {
+            "packet": packet,
+            "source": self.name,
+            "destination": None,
+            "status": "waiting",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+            "hop_history": [self.port],
+            "reason": reason
+        }
+        try:
+            parsed = parse_interest_packet(packet)
+            entry["destination"] = parsed["Name"]
+        except Exception:
+            entry["destination"] = "Unknown"
+
+        with self.buffer_lock:
+            self.buffer.append(entry)
+        print(f"[{self.name}] Added packet to buffer (reason: {reason}). Queue size: {len(self.buffer)}")
+
+    def update_buffer_status(self, dest_name, status):
+        with self.buffer_lock:
+            for entry in list(self.buffer):
+                if entry["destination"] == dest_name and entry["status"] == "waiting":
+                    entry["status"] = status
+                    print(f"[{self.name}] Updated buffer entry for {dest_name}: {status}")
+
+    def _process_buffer_loop(self):
+        while self.running:
+            try:
+                with self.buffer_lock:
+                    if self.buffer:
+                        entry = self.buffer[0]
+                        if entry["status"] == "resolved":
+                            pkt = entry["packet"]
+                            dest = entry["destination"]
+                            print(f"[{self.name}] Processing buffered packet to {dest}...")
+                            self.sock.sendto(pkt, ("127.0.0.1", self.port))
+                            entry["status"] = "forwarded"
+                            self.buffer.popleft()
+                            print(f"[{self.name}] Forwarded buffered packet to {dest}. Remaining: {len(self.buffer)}")
+            except Exception as e:
+                print(f"[{self.name}] Buffer processing error: {e}")
+            time.sleep(1)
+
+
     def send_interest(self, seq_num, name, flags=0x0, target=("127.0.0.1", 0)):
         pkt = create_interest_packet(seq_num, name, flags)
         self.sock.sendto(pkt, target)
@@ -288,6 +343,10 @@ class Node:
             # Check tables
             table, data = self.check_tables(parsed["Name"])
             #print("Table: " + str(table) + " Data: " + str(data))
+
+            if table is None:
+                self.add_to_buffer(packet, addr, reason="No FIB route available")
+                return  # buffer unknown routes
 
             if table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
