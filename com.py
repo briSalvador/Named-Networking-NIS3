@@ -63,6 +63,35 @@ if __name__ == "__main__":
     print("NodeC neighbors:", henry.get_neighbors())
     print("NameServer neighbors:", ns.get_neigbors())
 
+    # tests buffer and queueing
+    import threading
+
+    print("\n[TEST] Starting Buffer and Queueing Stress Test...")
+
+    def send_fake_interest(i):
+        fake_name = f"/UP/UnknownTarget{i}"
+        seq_num = 1000 + i
+        andrew.send_interest(seq_num, fake_name, target=("127.0.0.1", 5005))
+
+    num_packets = 50
+    threads = []
+
+    for i in range(num_packets):
+        t = threading.Thread(target=send_fake_interest, args=(i,))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+    print(f"[TEST] Sent {num_packets} simultaneous Interest packets.")
+    print("[TEST] Buffer growth and processing order below...\n")
+
+    time.sleep(10)
+
+
+
+
     # Keep running
     try:
         while True:
