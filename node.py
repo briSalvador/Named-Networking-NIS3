@@ -3,6 +3,7 @@ import threading
 import struct
 import time
 from DataPacket import DataPacket
+from RouteDataPacket import RouteDataPacket
 from InterestPacket import InterestPacket
 from Packet import Packet
 from datetime import datetime
@@ -92,6 +93,18 @@ def parse_data_packet(packet):
 # ---------------- HELLO / UPDATE Packets ----------------
 def create_hello_packet(name):
     packet_type = HELLO
+    flags = ACK_FLAG
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes)
+
+    header = struct.pack("!BB", packet_type_flags, name_length)
+    packet = header + name_bytes
+    return packet
+
+def create_hello_ns_packet(name):
+    packet_type = HELLO
     flags = 0x0
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
 
@@ -142,6 +155,32 @@ def get_domains_from_name(node_name):
         if len(segments) > 1 and segments[1]:
             domains.append(segments[1])
     return domains
+
+def parse_route_data_packet(packet):
+    if len(packet) < 4:
+        raise ValueError("Packet too short to parse route data header")
+    packet_type_flags, seq_num, info_size, name_length = struct.unpack("!BBBB", packet[:4])
+    if len(packet) < 4 + name_length + info_size:
+        raise ValueError("Packet too short for declared name/routing info lengths")
+    name = packet[4:4+name_length].decode("utf-8")
+    routing_info = packet[4+name_length:4+name_length+info_size]
+
+    try:
+        routing_info_decoded = routing_info.decode("utf-8")
+    except Exception:
+        routing_info_decoded = routing_info
+
+    packet_type = (packet_type_flags >> 4) & 0xF
+    flags = packet_type_flags & 0xF
+    return {
+        "PacketType": packet_type,
+        "Flags": flags,
+        "SequenceNumber": seq_num,
+        "InfoSize": info_size,
+        "NameLength": name_length,
+        "Name": name,
+        "RoutingInfo": routing_info_decoded
+    }
 
 class Node:
     def load_neighbors_from_file(self, filename):
@@ -196,6 +235,8 @@ class Node:
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
         self.listener_thread.start()
 
+        self.register_NS()
+
          # Buffer and Queueing (FIFO)
         self.buffer = deque()  
         self.buffer_lock = threading.Lock()
@@ -208,6 +249,15 @@ class Node:
         self.hello_interval = 5
         self.broadcast_sender_thread = threading.Thread(target=self._send_hello_loop, daemon=True)
         self.broadcast_sender_thread.start() """
+
+    def register_NS(self):
+        try:
+            pkt = create_hello_ns_packet(self.name)
+            # Change port logic later
+            self.sock.sendto(pkt, (self.host, 5000))
+            print(f"[{self.name}] Sent HELLO packet to {self.host}:{self.broadcast_port} to register with NS")
+        except Exception as e:
+            print(f"[{self.name}] Error sending HELLO packet to {self.host}:{self.broadcast_port}: {e}")
 
     def _listen_broadcast(self):
         while self.running:
@@ -357,6 +407,11 @@ class Node:
                     flags=ACK_FLAG,
                     target=addr
                 )
+            elif table == "FIB":
+                if pkt_obj.name in self.fib:
+                    for interface in self.fib[pkt_obj.name]['Interfaces']:
+                        print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to interface: {interface}")
+                        self.forward_interest(pkt_obj, ("127.0.0.1", interface))
 
             if pkt_obj.name not in self.pit:
                 self.pit_interfaces.append(addr[1])
@@ -366,12 +421,6 @@ class Node:
                 self.pit_interfaces.append(addr[1])
                 self.pit[pkt_obj.name] = list(self.pit_interfaces)
                 print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
-
-            if table == "FIB":
-                if pkt_obj.name in self.fib:
-                    for interface in self.fib[pkt_obj.name]['Interfaces']:
-                        print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to interface: {interface}")
-                        self.forward_interest(pkt_obj, ("127.0.0.1", interface))
 
             return pkt_obj
         elif packet_type == DATA:  # Data
@@ -409,6 +458,19 @@ class Node:
             # Add/update FIB
             self.add_fib(neighbor_name, addr[1], exp_time=5000)
             print(f"[{self.name}] Updated FIB with neighbor {neighbor_name} on {addr}")
+        elif packet_type == ROUTING_DATA:
+            parsed = parse_route_data_packet(packet)
+            pkt_obj = RouteDataPacket(
+                seq_num=parsed["SequenceNumber"],
+                name=parsed["Name"],
+                routing_info=parsed["RoutingInfo"],
+                flags=parsed["Flags"],
+                timestamp=timestamp
+            )
+            print(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
+            self.add_fib(pkt_obj.name, addr[1], exp_time=5000)
+
+            return pkt_obj
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
     

@@ -58,9 +58,9 @@ if __name__ == "__main__":
 
     # neighbor tables
     print("\n--- Neighbor Tables ---")
-    print("NodeA neighbors:", dpc1.get_neighbors())
-    print("NodeB neighbors:", andrew.get_neighbors())
-    print("NodeC neighbors:", henry.get_neighbors())
+    print("dpc1 neighbors:", dpc1.get_neighbors())
+    print("andrew neighbors:", andrew.get_neighbors())
+    print("henry neighbors:", henry.get_neighbors())
     print("NameServer neighbors:", ns.get_neigbors())
 
     # tests buffer and queueing
@@ -89,8 +89,9 @@ if __name__ == "__main__":
 
     time.sleep(10)
 
-
-
+    # fib tables
+    print("\n--- FIB Tables ---")
+    print("dpc1 FIB:", dpc1.fib)
 
     # Keep running
     try:
