@@ -1,6 +1,7 @@
 from node import Node
 from nameserver import NameServer
 import time
+import threading
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -15,8 +16,9 @@ ACK_FLAG = 0x1
 RET_FLAG = 0x2
 TRUNC_FLAG = 0x3
 
-# TODO: Set up initialize code to set up nodes, neighbors, and CS (did a bit of this)
-# Make border router nodes be able to have multiple names
+# TODO: Fix NS Hello Packet handling and data route updates to nodes
+# Implement handling of interest for routing
+# When data is sent back by a node, the node will add it into its CS and FIB (not sure if this was done yet)
 
 if __name__ == "__main__":
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="topology.txt")
@@ -44,15 +46,13 @@ if __name__ == "__main__":
     for node in nodes:
         node.load_neighbors_from_file("neighbors.txt")
 
-    # NodeA sends interest to NodeB
-    """ nodeB.add_cs("sensor/data", "Temperature: 28C")
-    nodeC.add_cs("sensor/data", "Temperature: 28C") """
+    andrew.add_cs("sensor/data", "Temperature: 28C")
+    goks.add_cs("sensor/data", "Temperature: 28C")
 
-    # NodeA -> NodeB, NodeB -> NodeC
-    """ nodeA.add_fib("sensor/data", 5002, 30)
-    nodeB.add_fib("sensor/data", 5003, 30) """
+    #andrew.add_fib("sensor/data", 5002, 30)
+    #nodeB.add_fib("sensor/data", 5003, 30)
 
-    #dpc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
+    dpc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
 
     time.sleep(2)
 
@@ -64,7 +64,6 @@ if __name__ == "__main__":
     print("NameServer neighbors:", ns.get_neigbors())
 
     # tests buffer and queueing
-    import threading
 
     print("\n[TEST] Starting Buffer and Queueing Stress Test...")
 
