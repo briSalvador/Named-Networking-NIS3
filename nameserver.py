@@ -37,7 +37,12 @@ def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
         seq_num = seq_num & 0xFF
         name_bytes = name.encode("utf-8")
         name_length = len(name_bytes) & 0xFF
-        if isinstance(routing_info, str):
+        # routing_info is a path (list of node names)
+        if isinstance(routing_info, list):
+            # Convert list to comma-separated string
+            routing_info_str = ",".join(routing_info)
+            routing_info_bytes = routing_info_str.encode("utf-8")
+        elif isinstance(routing_info, str):
             routing_info_bytes = routing_info.encode("utf-8")
         else:
             routing_info_bytes = routing_info
@@ -70,7 +75,7 @@ def parse_hello_packet(packet):
 
 def create_hello_packet(name):
     packet_type = HELLO
-    flags = 0x0
+    flags = 0x0 # This is only for NS
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
 
     name_bytes = name.encode("utf-8")
@@ -110,33 +115,34 @@ class NameServer:
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
         self.listener_thread.start()
 
-        self.update_thread = threading.Thread(target=self._periodic_update, daemon=True)
-        self.update_thread.start()
+        #self.update_thread = threading.Thread(target=self._periodic_update, daemon=True)
+        #self.update_thread.start()
 
-        print(f"[NS {self.ns_name}] up at {self.host}:{self.port}")
-        print(f"[NS {self.ns_name}] loaded topology with {len(self.graph)} nodes from {self.topo_file}")
+        #print(f"[NS {self.ns_name}] up at {self.host}:{self.port}")
+        #print(f"[NS {self.ns_name}] loaded topology with {len(self.graph)} nodes from {self.topo_file}")
 
     def _periodic_update(self):
         while self.running:
             domain = self.get_domains_from_name()
-            # Find all nodes in graph whose top-level domain matches
             for node in self.graph:
-                node_domain = node.lstrip('/').split('/')[0] if node else ''
-                if node_domain == domain and node != self.ns_name:
-                    # Compute next hop for node to reach name server
-                    path = self._shortest_path(node, self.ns_name)
-                    if path and len(path) > 1:
-                        next_hop = path[1]
-                    else:
-                        next_hop = self.ns_name
-                    
-                    next_hop_info = f"{next_hop} {len(path)}"
-                    pkt = create_route_data_packet(seq_num=0, name=self.ns_name, routing_info=next_hop_info)
-                    # Send to node (if port known)
-                    if node in self.name_to_port:
-                        target_port = self.name_to_port[node]
-                        self.sock.sendto(pkt, (self.host, target_port))
-                        #print(f"[NS {self.ns_name}] Sent ROUTE packet to {node} at port {target_port} with next hop {next_hop}")
+                # Handle nodes with multiple names (space-separated)
+                node_names = node.split()
+                #print(f"Node Names [{self.ns_name}]: {node_names}")
+                for alias in node_names:
+                    alias_domain = alias.lstrip('/').split('/')[0] if alias else ''
+                    if alias_domain == domain and node != self.ns_name:
+                        # Compute next hop for node to reach name server
+                        path = self._shortest_path(node, self.ns_name)
+                        if path and len(path) > 1:
+                            next_hop = path[1]
+                        else:
+                            next_hop = self.ns_name
+                        pkt = create_route_data_packet(seq_num=0, name=self.ns_name, routing_info=path)
+                        # Send to node (if port known)
+                        if node in self.name_to_port:
+                            target_port = self.name_to_port[node]
+                            self.sock.sendto(pkt, (self.host, target_port))
+                            print(f"[NS {self.ns_name}] Sent ROUTE packet to {node} (alias: {alias}) at port {target_port} with next hop {next_hop}")
             time.sleep(10)
 
     def get_domains_from_name(self):
@@ -160,10 +166,10 @@ class NameServer:
                             try:
                                 pkt = create_hello_packet(self.ns_name)
                                 self.sock.sendto(pkt, (self.host, int(port)))
-                                print(f"[{self.ns_name}] Sent HELLO packet to {self.host}:{port}")
+                                #print(f"[{self.ns_name}] Sent HELLO packet to {self.host}:{port}")
                             except Exception as e:
                                 print(f"[{self.ns_name}] Error sending HELLO packet to {self.host}:{port}: {e}")
-                        print(f"[{self.ns_name}] Loaded neighbors from {filename}: {ports}")
+                        #print(f"[{self.ns_name}] Loaded neighbors from {filename}: {ports}")
         except Exception as e:
             print(f"[{self.ns_name}] Error loading neighbors from {filename}: {e}")           
 
@@ -221,7 +227,7 @@ class NameServer:
         parsed = parse_update_packet(packet)
         node_name = parsed["Name"]
         self.port_to_name[addr] = node_name
-        self.name_to_port[node_name] = addr
+        self.name_to_port[node_name] = addr[1]
         print(f"[NS {self.ns_name}] UPDATE from {node_name} at {addr}")
 
     def _handle_interest(self, packet, addr):

@@ -22,6 +22,8 @@ TRUNC_FLAG = 0x3
 
 if __name__ == "__main__":
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="topology.txt")
+    admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt")
+    
     dpc1 = Node("/DLSU/Andrew/PC1", port=5001)
     andrew = Node("/DLSU/Andrew", port=5002)
     goks = Node("/DLSU/Gokongwei", port=5003)
@@ -40,17 +42,12 @@ if __name__ == "__main__":
     lara = Node("/UP/Lara", port=5016)
     upc1 = Node("/UP/Salcedo/PC1", port=5017)
 
-    nodes =[ns, dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1]
+    nodes =[dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, 
+            gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns, admu_ns]
 
     # load all nodes
     for node in nodes:
         node.load_neighbors_from_file("neighbors.txt")
-
-    andrew.add_cs("sensor/data", "Temperature: 28C")
-    goks.add_cs("sensor/data", "Temperature: 28C")
-
-    #andrew.add_fib("sensor/data", 5002, 30)
-    #nodeB.add_fib("sensor/data", 5003, 30)
 
     dpc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
 
@@ -61,6 +58,7 @@ if __name__ == "__main__":
     print("dpc1 neighbors:", dpc1.get_neighbors())
     print("andrew neighbors:", andrew.get_neighbors())
     print("henry neighbors:", henry.get_neighbors())
+    print("border router neighbors: ", dxa.get_neighbors())
     print("NameServer neighbors:", ns.get_neigbors())
 
     # tests buffer and queueing
@@ -91,6 +89,7 @@ if __name__ == "__main__":
     # fib tables
     print("\n--- FIB Tables ---")
     print("dpc1 FIB:", dpc1.fib)
+    print("border router FIB: ", dxa.fib)
 
     # Keep running
     try:

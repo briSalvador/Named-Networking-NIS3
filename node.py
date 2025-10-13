@@ -174,8 +174,11 @@ def parse_route_data_packet(packet):
     except Exception:
         routing_info_decoded = routing_info
 
+    # routing_info is a comma-separated path
+    path = routing_info_decoded.split(",") if routing_info_decoded else []
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
+
     return {
         "PacketType": packet_type,
         "Flags": flags,
@@ -183,8 +186,34 @@ def parse_route_data_packet(packet):
         "InfoSize": info_size,
         "NameLength": name_length,
         "Name": name,
-        "RoutingInfo": routing_info_decoded
+        "Path": path,
+        "RoutingInfo": routing_info_decoded,
+        "RawRoutingInfo": routing_info
     }
+
+
+def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
+    """
+    Create a ROUTING_DATA packet. routing_info can be a list (path) or a string.
+    Packet format: !BBBB | name_bytes | routing_info_bytes
+      packet_type_flags (1 byte), seq_num (1), info_size (1), name_length (1)
+    """
+    packet_type = ROUTING_DATA
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+    seq_num = seq_num & 0xFF
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes) & 0xFF
+
+    if isinstance(routing_info, list):
+        routing_info_bytes = ",".join(routing_info).encode("utf-8")
+    elif isinstance(routing_info, str):
+        routing_info_bytes = routing_info.encode("utf-8")
+    else:
+        routing_info_bytes = bytes(routing_info)
+
+    info_size = len(routing_info_bytes) & 0xFF
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, info_size, name_length)
+    return header + name_bytes + routing_info_bytes
 
 class Node:
     def load_neighbors_from_file(self, filename):
@@ -231,7 +260,7 @@ class Node:
         self.fragment_buffer = {}
         self.fib_interfaces = []
         self.pit_interfaces = []
-
+        self.name_to_port = {}  # Mapping from node names to their ports
 
         print(f"[{self.name}] Node started at {self.host}:{self.port} in domain(s): {self.domains}")
 
@@ -239,8 +268,6 @@ class Node:
         self.running = True
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
         self.listener_thread.start()
-
-        self.register_NS()
 
          # Buffer and Queueing (FIFO)
         self.buffer = deque()  
@@ -254,15 +281,6 @@ class Node:
         self.hello_interval = 5
         self.broadcast_sender_thread = threading.Thread(target=self._send_hello_loop, daemon=True)
         self.broadcast_sender_thread.start() """
-
-    def register_NS(self):
-        try:
-            pkt = create_hello_ns_packet(self.name)
-            # Change port logic later
-            self.sock.sendto(pkt, (self.host, 5000))
-            print(f"[{self.name}] Sent HELLO packet to {self.host}:{self.broadcast_port} to register with NS")
-        except Exception as e:
-            print(f"[{self.name}] Error sending HELLO packet to {self.host}:{self.broadcast_port}: {e}")
 
     def _listen_broadcast(self):
         while self.running:
@@ -381,12 +399,13 @@ class Node:
             print(f"[{self.name}] Sent DATA packet to {target}")
         return True
     
-    def add_fib(self, name, interface, exp_time):
+    def add_fib(self, name, interface, exp_time, hop_count):
         # interface is the next hop port (int)
         if name not in self.fib:
             self.fib[name] = {
                 "NextHops": [],
-                "ExpirationTime": exp_time
+                "ExpirationTime": exp_time,
+                "HopCount": hop_count
             }
         if interface not in self.fib[name]["NextHops"]:
             self.fib[name]["NextHops"].append(interface)
@@ -496,10 +515,16 @@ class Node:
             parsed = parse_hello_packet(packet)
             neighbor_name = parsed["Name"]
             self.neighbor_table[neighbor_name] = timestamp
+            self.name_to_port[neighbor_name] = addr[1]
             print(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
 
+            if parsed["Flags"] == 0x0:
+                update_pkt = create_update_packet(self.name)
+                self.sock.sendto(update_pkt, addr)
+                print(f"[{self.name}] Sent UPDATE back to {neighbor_name} at {addr}")
+
             # Add neighbor to FIB
-            self.add_fib(neighbor_name, addr[1], exp_time=5000)
+            self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
 
             # Send UPDATE back
             update_pkt = create_update_packet(self.name)
@@ -509,23 +534,24 @@ class Node:
             parsed = parse_update_packet(packet)
             neighbor_name = parsed["Name"]
             self.neighbor_table[neighbor_name] = timestamp
+            self.name_to_port[neighbor_name] = addr[1]
             print(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr}")
 
             # Add/update FIB
-            self.add_fib(neighbor_name, addr[1], exp_time=5000)
+            self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
             print(f"[{self.name}] Updated FIB with neighbor {neighbor_name} on {addr}")
         elif packet_type == ROUTING_DATA:
             parsed = parse_route_data_packet(packet)
             pkt_obj = RouteDataPacket(
                 seq_num=parsed["SequenceNumber"],
                 name=parsed["Name"],
-                routing_info=parsed["RoutingInfo"],
                 flags=parsed["Flags"],
-                timestamp=timestamp
+                timestamp=timestamp,
+                path=parsed.get("Path", []),
+                raw_routing_info=parsed.get("RawRoutingInfo", "")
             )
             print(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
-            self.add_fib(pkt_obj.name, addr[1], exp_time=5000)
-
+            self.add_fib(pkt_obj.name, addr[1], exp_time=5000, hop_count=len(pkt_obj.path))
             return pkt_obj
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
