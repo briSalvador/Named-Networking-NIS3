@@ -61,19 +61,23 @@ if __name__ == "__main__":
     print("border router neighbors: ", dxa.get_neighbors())
     print("NameServer neighbors:", ns.get_neigbors())
 
-    # tests buffer and queueing
 
-    print("\n[TEST] Starting Buffer and Queueing Stress Test...")
-
-    def send_fake_interest(i):
-        fake_name = f"/UP/UnknownTarget{i}"
-        seq_num = 1000 + i
-        andrew.send_interest(seq_num, fake_name, target=("127.0.0.1", 5005))
-
-    num_packets = 50
+    # tests buffer and queueing (temp)
+    NPU = 8
+    TOTAL_PACKETS = 50 
     threads = []
 
-    for i in range(num_packets):
+    print(f"\n[TEST] Starting Buffer and Queueing Test...")
+    print(f"[CONFIG] NPU = {NPU}, Total Packets = {TOTAL_PACKETS}\n")
+
+    def send_fake_interest(i):
+        processing_unit = i % NPU
+        fake_name = f"/UP/UnknownTarget{processing_unit}"
+        seq_num = 1000 + i
+        andrew.send_interest(seq_num, fake_name, target=("127.0.0.1", 5005))
+        print(f"[TEST] Packet {i} handled by NPU {processing_unit}")
+
+    for i in range(TOTAL_PACKETS):
         t = threading.Thread(target=send_fake_interest, args=(i,))
         t.start()
         threads.append(t)
@@ -81,8 +85,9 @@ if __name__ == "__main__":
     for t in threads:
         t.join()
 
-    print(f"[TEST] Sent {num_packets} simultaneous Interest packets.")
-    print("[TEST] Buffer growth and processing order below...\n")
+    print(f"\n[TEST] Sent {TOTAL_PACKETS} Interest packets distributed across {NPU} NPUs.")
+    print("[TEST] Buffer growth and FIFO processing sequence below...\n")
+
 
     time.sleep(10)
 
