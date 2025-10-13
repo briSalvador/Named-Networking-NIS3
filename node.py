@@ -130,22 +130,48 @@ def parse_hello_packet(packet):
         "Name": name
     }
 
-def create_update_packet(name):
+def create_update_packet(name, next_hop_port, number_of_hops):
     packet_type = UPDATE
     flags = 0x0
     packet_type_flags = (packet_type << 4) | flags
     name_bytes = name.encode("utf-8")
     name_length = len(name_bytes)
-    header = struct.pack("!BB", packet_type_flags, name_length)
-    return header + name_bytes
+    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
+    update_info = f"{name} {next_hop_port} {number_of_hops}"
+    update_info_bytes = update_info.encode("utf-8")
+    update_info_length = len(update_info_bytes)
+    header = struct.pack("!BBH", packet_type_flags, name_length, update_info_length)
+    return header + name_bytes + update_info_bytes
+
+def create_ns_update_packet(name, next_hop_port, number_of_hops):
+    packet_type = UPDATE
+    flags = 0x1
+    packet_type_flags = (packet_type << 4) | flags
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes)
+    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
+    update_info = f"{name} {next_hop_port} {number_of_hops}"
+    update_info_bytes = update_info.encode("utf-8")
+    update_info_length = len(update_info_bytes)
+    header = struct.pack("!BBH", packet_type_flags, name_length, update_info_length)
+    return header + name_bytes + update_info_bytes
 
 def parse_update_packet(packet):
-    packet_type_flags, name_length = struct.unpack("!BB", packet[:2])
-    name = packet[2:2+name_length].decode("utf-8")
+    packet_type_flags, name_length, update_info_length = struct.unpack("!BBH", packet[:4])
+    name = packet[4:4+name_length].decode("utf-8")
+    update_info_start = 4 + name_length
+    update_info_end = update_info_start + update_info_length
+    update_info = packet[update_info_start:update_info_end].decode("utf-8")
+    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
+    parts = update_info.split()
+    next_hop = parts[1] if len(parts) > 1 else None
+    number_of_hops = int(parts[2]) if len(parts) > 2 else None
     return {
         "PacketType": (packet_type_flags >> 4) & 0xF,
         "Flags": packet_type_flags & 0xF,
-        "Name": name
+        "Name": name,
+        "NextHop": next_hop,
+        "NumberOfHops": number_of_hops
     }
 
 def get_domains_from_name(node_name):
@@ -252,6 +278,7 @@ class Node:
         self.broadcast_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.broadcast_sock.bind((self.host, self.broadcast_port))
         self.neighbor_table = {}
+        self.last_update_received = {}
 
         # Tables
         self.fib = {} # {name: {"NextHops": [port, ...], "ExpirationTime": ...}}
@@ -403,13 +430,20 @@ class Node:
         # interface is the next hop port (int)
         if name not in self.fib:
             self.fib[name] = {
-                "NextHops": [],
+                "NextHops": interface,
                 "ExpirationTime": exp_time,
                 "HopCount": hop_count
             }
-        if interface not in self.fib[name]["NextHops"]:
-            self.fib[name]["NextHops"].append(interface)
-        print(f"[{self.name}] FIB updated: {self.fib}")
+        elif name in self.fib and hop_count < self.fib[name]["HopCount"]:
+            self.fib[name] = {
+                "NextHops": interface,
+                "ExpirationTime": exp_time,
+                "HopCount": hop_count
+            }
+
+        """ if interface not in self.fib[name]["NextHops"]:
+            self.fib[name]["NextHops"].append(interface) """
+        #print(f"[{self.name}] FIB updated: {self.fib}")
 
     def get_next_hops(self, name):
         """Return a list of next hop ports for a given name/prefix."""
@@ -519,27 +553,41 @@ class Node:
             print(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
 
             if parsed["Flags"] == 0x0:
-                update_pkt = create_update_packet(self.name)
+                sender_domains = get_domains_from_name(neighbor_name)
+                ns_update_packet = create_ns_update_packet(neighbor_name, addr[1], 1)
+                self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
+                                                        ns_update_packet, exclude_port=addr[1])
+            else:
+                update_pkt = create_update_packet(self.name, self.port, 1)
                 self.sock.sendto(update_pkt, addr)
-                print(f"[{self.name}] Sent UPDATE back to {neighbor_name} at {addr}")
+                #print(f"[{self.name}] Sent UPDATE back to {neighbor_name} at {addr}")
 
             # Add neighbor to FIB
             self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
-
-            # Send UPDATE back
-            update_pkt = create_update_packet(self.name)
-            self.sock.sendto(update_pkt, addr)
-            print(f"[{self.name}] Sent UPDATE back to {neighbor_name} at {addr}")
         elif packet_type == UPDATE:
             parsed = parse_update_packet(packet)
             neighbor_name = parsed["Name"]
-            self.neighbor_table[neighbor_name] = timestamp
-            self.name_to_port[neighbor_name] = addr[1]
-            print(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr}")
+            if parsed["Flags"] == 0x1:
+                now = time.time()
+                cooldown = 10  # seconds
+                last_time = self.last_update_received.get(neighbor_name, 0)
+                if now - last_time < cooldown:
+                    # Ignore NS UPDATE if within cooldown
+                    #print(f"[{self.name}] Ignored NS UPDATE from {neighbor_name} due to cooldown.")
+                    return
+                self.last_update_received[neighbor_name] = now
+                sender_domains = get_domains_from_name(neighbor_name)
+                hops = parsed["NumberOfHops"] + 1 if parsed["NumberOfHops"] else 1
+                ns_update_packet = create_ns_update_packet(neighbor_name, self.port, hops)
+                self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
+                                                        ns_update_packet, exclude_port=addr[1])
+                self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=hops)
+            else:
+                # Normal UPDATE, no cooldown
+                self.neighbor_table[neighbor_name] = timestamp
+                self.name_to_port[neighbor_name] = addr[1]
+                self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
 
-            # Add/update FIB
-            self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
-            print(f"[{self.name}] Updated FIB with neighbor {neighbor_name} on {addr}")
         elif packet_type == ROUTING_DATA:
             parsed = parse_route_data_packet(packet)
             pkt_obj = RouteDataPacket(
@@ -616,3 +664,20 @@ class Node:
             print(f"[{self.name}] Added neighbor {key} to neighbor_table.")
         else:
             print(f"[{self.name}] Neighbor {key} already exists in neighbor_table.")
+
+    def send_ns_update_to_domain_neighbors(self, sender_name, sender_domains, ns_update_packet, exclude_port=None):
+        """
+        Send NS UPDATE packet to all neighbors whose domain matches sender_domains.
+        exclude_port: port to exclude from sending (e.g., sender's port)
+        """
+        for neighbor_name in self.neighbor_table.keys():
+            neighbor_domains = get_domains_from_name(neighbor_name)
+            for n in neighbor_domains:
+                #print(f"[{self.name}] Checking neighbor domain for {neighbor_name}: {n}")
+                for domain in sender_domains:
+                    if domain == n:
+                        neighbor_port = self.name_to_port.get(neighbor_name)
+                        if neighbor_port and (exclude_port is None or neighbor_port != exclude_port):
+                            send_addr = (self.host, neighbor_port)
+                            self.sock.sendto(ns_update_packet, send_addr)
+                            #print(f"[{self.name}] Sent NS UPDATE to {neighbor_name} at {send_addr}")

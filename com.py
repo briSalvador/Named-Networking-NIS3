@@ -88,12 +88,13 @@ if __name__ == "__main__":
     print(f"\n[TEST] Sent {TOTAL_PACKETS} Interest packets distributed across {NPU} NPUs.")
     print("[TEST] Buffer growth and FIFO processing sequence below...\n")
 
-
     time.sleep(10)
 
     # fib tables
     print("\n--- FIB Tables ---")
+    print("henry FIB:", henry.fib)
     print("dpc1 FIB:", dpc1.fib)
+    print("dlsu FIB:", dlsu.fib)
     print("border router FIB: ", dxa.fib)
 
     # Keep running
