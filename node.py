@@ -449,7 +449,7 @@ class Node:
         """Return a list of next hop ports for a given name/prefix."""
         if name in self.fib:
             return self.fib[name]["NextHops"]
-        return []
+        return
 
     def forward_interest(self, pkt_obj, target=None):
         # If target is None, use FIB to determine next hops
@@ -460,8 +460,9 @@ class Node:
                 self.sock.sendto(pkt, ("127.0.0.1", port))
                 print(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
         else:
-            # Direct forwarding (legacy)
-            print(f"[{self.name}] Forwarded INTEREST packet to {target}")
+            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
+            self.sock.sendto(pkt, target)
+            print(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
 
     def receive_packet(self, packet, addr=None):
         # Peek packet type
@@ -502,7 +503,6 @@ class Node:
                 print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
             if table == "CS":
-                # Add code that removes PIT entry once fulfilling interest request
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.send_data(
                     seq_num=pkt_obj.seq_num,
@@ -511,12 +511,20 @@ class Node:
                     flags=ACK_FLAG,
                     target=addr
                 )
+
+                self.remove_pit(pkt_obj.name)
             elif table == "FIB":
                 # Use next hop(s) from FIB
-                next_hops = self.get_next_hops(pkt_obj.name)
+                """ next_hops = self.get_next_hops(pkt_obj.name)
                 for port in next_hops:
                     print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {port}")
-                    self.forward_interest(pkt_obj, ("127.0.0.1", port))
+                    self.forward_interest(pkt_obj, ("127.0.0.1", port)) """
+                
+                next_hop = data["NextHops"]
+                print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
+                self.forward_interest(pkt_obj, ("127.0.0.1", next_hop))
+
+            # Add code that forwards the interest packet to the NS
 
             return pkt_obj
         elif packet_type == DATA:  # Data
@@ -528,8 +536,9 @@ class Node:
                 flags=parsed["Flags"],
                 timestamp=timestamp
             )
-            # Fragmentation handling
             frag_key = (parsed["SequenceNumber"], parsed["Name"])
+            name = parsed["Name"]
+            # Fragmentation handling
             if parsed["TotalFragments"] > 1:
                 if frag_key not in self.fragment_buffer:
                     self.fragment_buffer[frag_key] = [None] * parsed["TotalFragments"]
@@ -539,11 +548,26 @@ class Node:
                     # All fragments received, reassemble
                     full_payload = ''.join(self.fragment_buffer[frag_key])
                     print(f"[{self.name}] All fragments received. Reassembled payload: {full_payload}")
+                    # Add to CS
+                    self.add_cs(name, full_payload)
+                    # Forward to all PIT interfaces
+                    if name in self.pit:
+                        for interface in self.pit[name]:
+                            pkt = create_data_packet(parsed["SequenceNumber"], name, full_payload, parsed["Flags"], 1, 1)
+                            self.sock.sendto(pkt, (self.host, interface))
+                            print(f"[{self.name}] Forwarded reassembled DATA to PIT interface {interface}")
                     del self.fragment_buffer[frag_key]
             else:
                 print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
                 print(f"  Parsed: {parsed}")
                 print(f"  Object: {pkt_obj}")
+                self.add_cs(name, parsed["Payload"])
+                if name in self.pit:
+                    for interface in self.pit[name]:
+                        pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
+                        self.sock.sendto(pkt, (self.host, interface))
+                        print(f"[{self.name}] Forwarded DATA to PIT interface {interface}")
+
             return pkt_obj
         elif packet_type == HELLO:
             parsed = parse_hello_packet(packet)
@@ -645,16 +669,79 @@ class Node:
     def remove_pit(self, name):
         if name in self.pit:
             del self.pit[name]
+            print(f"[{self.name}] Removed {name} from PIT.")
+
+    def levenshtein_distance(self, s1, s2):
+        # Exclude '/' from both strings before comparison
+        s1 = s1.replace('/', '')
+        s2 = s2.replace('/', '')
+        if len(s1) < len(s2):
+            return self.levenshtein_distance(s2, s1)
+        if len(s2) == 0:
+            return len(s1)
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        return previous_row[-1]
 
     def check_tables(self, name):
-        if name in self.cs:
-            return "CS", self.cs[name]
-        elif name in self.pit:
-            return "PIT", self.pit[name]
-        elif name in self.fib:
-            return "FIB", self.fib[name]
-        else:
-            return None, None
+        # 1. CS: Exact match or Levenshtein <= 3
+        for key in self.cs.keys():
+            if name == key:
+                return "CS", self.cs[key]
+        for key in self.cs.keys():
+            score = self.levenshtein_distance(name, key)
+            if score <= 3:
+                return "CS", self.cs[key]
+
+        # 2. PIT: Exact match only
+        for key in self.pit.keys():
+            if name == key:
+                return "PIT", self.pit[key]
+
+        # 3. FIB: Longest prefix match, then Levenshtein among those, else Levenshtein <= 3
+        prefix_matches = []
+        max_prefix_len = 0
+        for key in self.fib.keys():
+            if name.startswith(key):
+                if len(key) > max_prefix_len:
+                    max_prefix_len = len(key)
+                    prefix_matches = [key]
+                elif len(key) == max_prefix_len:
+                    prefix_matches.append(key)
+
+        if prefix_matches:
+            # If only one, use it. If multiple, use Levenshtein to find the closest
+            if len(prefix_matches) == 1:
+                return "FIB", self.fib[prefix_matches[0]]
+            else:
+                best_key = None
+                best_score = float('inf')
+                for key in prefix_matches:
+                    score = self.levenshtein_distance(name, key)
+                    if score < best_score:
+                        best_score = score
+                        best_key = key
+                return "FIB", self.fib[best_key]
+
+        # FIB: Levenshtein <= 3 among all FIB entries
+        best_key = None
+        best_score = float('inf')
+        for key in self.fib.keys():
+            score = self.levenshtein_distance(name, key)
+            if score <= 3 and score < best_score:
+                best_score = score
+                best_key = key
+        if best_key is not None:
+            return "FIB", self.fib[best_key]
+
+        return None, None
         
     def add_neighbor(self, addr, port):
         key = (addr, port)

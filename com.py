@@ -88,7 +88,12 @@ if __name__ == "__main__":
     print(f"\n[TEST] Sent {TOTAL_PACKETS} Interest packets distributed across {NPU} NPUs.")
     print("[TEST] Buffer growth and FIFO processing sequence below...\n")
 
-    time.sleep(10)
+    time.sleep(4)
+
+    # Interest Testing (Levenshtein Distance)
+    dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
+    goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hellow.txt", target=("127.0.0.1", 5004))
+    time.sleep(2)
 
     # fib tables
     print("\n--- FIB Tables ---")
