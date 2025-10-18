@@ -93,6 +93,7 @@ if __name__ == "__main__":
     # Interest Testing (Levenshtein Distance)
     dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hellow.txt", target=("127.0.0.1", 5004))
+    #henry.send_interest(seq_num=0, name="/DLSU/Andrew", target=("127.0.0.1", 5006))
     time.sleep(2)
 
     # fib tables

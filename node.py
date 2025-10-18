@@ -512,7 +512,7 @@ class Node:
                     target=addr
                 )
 
-                self.remove_pit(pkt_obj.name)
+                self.remove_pit(pkt_obj.name, addr[1])
             elif table == "FIB":
                 # Use next hop(s) from FIB
                 """ next_hops = self.get_next_hops(pkt_obj.name)
@@ -550,23 +550,27 @@ class Node:
                     print(f"[{self.name}] All fragments received. Reassembled payload: {full_payload}")
                     # Add to CS
                     self.add_cs(name, full_payload)
-                    # Forward to all PIT interfaces
+                    # Forward to all PIT interfaces and remove them after
                     if name in self.pit:
-                        for interface in self.pit[name]:
+                        interfaces = list(self.pit[name])
+                        for interface in interfaces:
                             pkt = create_data_packet(parsed["SequenceNumber"], name, full_payload, parsed["Flags"], 1, 1)
                             self.sock.sendto(pkt, (self.host, interface))
                             print(f"[{self.name}] Forwarded reassembled DATA to PIT interface {interface}")
+                            self.remove_pit(name, interface)
                     del self.fragment_buffer[frag_key]
             else:
                 print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
-                print(f"  Parsed: {parsed}")
-                print(f"  Object: {pkt_obj}")
+                print(f"[{self.name}] Parsed: {parsed}")
+                print(f"[{self.name}] Object: {pkt_obj}")
                 self.add_cs(name, parsed["Payload"])
                 if name in self.pit:
-                    for interface in self.pit[name]:
+                    interfaces = list(self.pit[name])
+                    for interface in interfaces:
                         pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
                         self.sock.sendto(pkt, (self.host, interface))
                         print(f"[{self.name}] Forwarded DATA to PIT interface {interface}")
+                        self.remove_pit(name, interface)
 
             return pkt_obj
         elif packet_type == HELLO:
@@ -666,10 +670,18 @@ class Node:
         self.pit_interfaces.append(interface)
         self.pit[name] = (list(self.pit_interfaces))
 
-    def remove_pit(self, name):
+    def remove_pit(self, name, interface=None):
         if name in self.pit:
-            del self.pit[name]
-            print(f"[{self.name}] Removed {name} from PIT.")
+            if interface is None:
+                del self.pit[name]
+                print(f"[{self.name}] Removed {name} from PIT.")
+            else:
+                if interface in self.pit[name]:
+                    self.pit[name].remove(interface)
+                    print(f"[{self.name}] Removed interface {interface} from PIT entry {name}.")
+                if not self.pit[name]:
+                    del self.pit[name]
+                    print(f"[{self.name}] Removed {name} from PIT (no interfaces left).")
 
     def levenshtein_distance(self, s1, s2):
         # Exclude '/' from both strings before comparison
