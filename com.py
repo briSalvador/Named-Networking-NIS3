@@ -2,6 +2,7 @@ from node import Node
 from nameserver import NameServer
 import time
 import threading
+import queue
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -103,10 +104,102 @@ if __name__ == "__main__":
     print("dlsu FIB:", dlsu.fib)
     print("border router FIB: ", dxa.fib)
 
-    # Keep running
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        for node in nodes:
-            node.stop()
+# DEBUGGING MENU 
+class DebugController:
+    def __init__(self, nodes):
+        self.nodes = {}
+        for n in nodes:
+            if hasattr(n, "name"):
+                self.nodes[n.name] = n
+            elif hasattr(n, "ns_name"):
+                self.nodes[n.ns_name] = n
+        self.selected_node = None
+        self.command_queue = queue.Queue()
+
+
+    def list_nodes(self):
+        print("\nAvailable Nodes:")
+        for n in self.nodes.values():
+            node_name = getattr(n, "name", getattr(n, "ns_name", "Unknown"))
+            node_port = getattr(n, "port", "N/A")
+            print(f"  {node_name}  (port {node_port})")
+        print()
+
+
+    def select_node(self, node_name):
+        if node_name in self.nodes:
+            self.selected_node = self.nodes[node_name]
+            print(f"\n[DEBUG] Zoomed into node: {node_name} (port {self.selected_node.port})")
+        else:
+            print(f"[DEBUG] Node {node_name} not found.")
+
+    def run_test(self, test_id):
+        print(f"[DEBUG] Running test case {test_id}...")
+        # test
+        if test_id == "1":
+            src = self.nodes.get("/DLSU/Andrew/PC1")
+            dest = self.nodes.get("/DLSU")
+            if src and dest:
+                src.send_interest(seq_num=1, name="sensor/data", target=("127.0.0.1", dest.port))
+        else:
+            print(f"[DEBUG] Test {test_id} not defined.")
+
+    def help(self):
+        print("""
+[DEBUG COMMANDS]
+  list                 - show all nodes
+  select <node_name>   - zoom into a node (for later)
+  run <test_id>        - execute a predefined test (run 1 for now)
+  help                 - show this menu
+  exit                 - quit debugging
+        """)
+
+    def process_command(self, cmd):
+        parts = cmd.strip().split()
+        if not parts:
+            return
+        match parts[0]:
+            case "list":
+                self.list_nodes()
+            case "select":
+                if len(parts) > 1:
+                    self.select_node(parts[1])
+                else:
+                    print("[DEBUG] Usage: select <node_name>")
+            case "run":
+                if len(parts) > 1:
+                    self.run_test(parts[1])
+                else:
+                    print("[DEBUG] Usage: run <test_id>")
+            case "help":
+                self.help()
+            case "exit":
+                print("[DEBUG] Exiting debug input thread...")
+                self.command_queue.put("exit")
+                return True
+            case _:
+                print("[DEBUG] Unknown command. Type 'help' for options.")
+        return False
+
+
+def debug_input_loop(controller):
+    controller.help()
+    while True:
+        cmd = input("> ")
+        if controller.process_command(cmd):
+            break
+
+
+controller = DebugController(nodes)
+
+input_thread = threading.Thread(target=debug_input_loop, args=(controller,), daemon=True)
+input_thread.start()
+
+
+# Keep running
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    for node in nodes:
+        node.stop()
