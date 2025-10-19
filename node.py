@@ -497,7 +497,7 @@ class Node:
                 self.pit_interfaces.append(addr[1])
                 self.pit[pkt_obj.name] = list(self.pit_interfaces)
                 print(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
-            elif pkt_obj.name in self.pit and addr[1] not in self.pit_interfaces:
+            elif pkt_obj.name in self.pit:
                 self.pit_interfaces.append(addr[1])
                 self.pit[pkt_obj.name] = list(self.pit_interfaces)
                 print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
@@ -549,6 +549,7 @@ class Node:
                     full_payload = ''.join(self.fragment_buffer[frag_key])
                     print(f"[{self.name}] All fragments received. Reassembled payload: {full_payload}")
                     # Add to CS
+                    # TODO: Add to FIB with proper hop count and next hop
                     self.add_cs(name, full_payload)
                     # Forward to all PIT interfaces and remove them after
                     if name in self.pit:
@@ -564,6 +565,7 @@ class Node:
                 print(f"[{self.name}] Parsed: {parsed}")
                 print(f"[{self.name}] Object: {pkt_obj}")
                 self.add_cs(name, parsed["Payload"])
+                # Forward to all PIT interfaces and remove them after
                 if name in self.pit:
                     interfaces = list(self.pit[name])
                     for interface in interfaces:
