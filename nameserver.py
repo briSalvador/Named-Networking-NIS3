@@ -294,14 +294,9 @@ class NameServer:
         origin_name = parsed["OriginNode"]
         route_payload = {
             "origin_name": origin_name,
-
-
-
-
             "path": path,
             "dest": original_name,
             "next_hop": next_hop,
-
         }
         resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
 

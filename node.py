@@ -696,52 +696,66 @@ class Node:
             print(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
             self.log(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
 
-            # If this ROUTING_DATA is a route reply from NS, parse JSON and act
-
+            origin_name = parsed.get("OriginName")
             route_info = parsed.get("RoutingInfoJson")
-            if isinstance(route_info, dict) and ("next_hop" in route_info or "next_hop_port" in route_info):
-                dest = route_info.get("dest")
-                next_hop = route_info.get("next_hop")
-                next_hop_port = None
-                # Try to get next_hop_port from FIB if next_hop is a node name
-                if next_hop:
-                    fib_entry = self.fib.get(next_hop)
-                    if fib_entry:
-                        next_hop_port = fib_entry["NextHops"]
-                if not next_hop_port:
-                    # fallback to next_hop_port in route_info
-                    next_hop_port = route_info.get("next_hop_port")
-                if dest and next_hop_port:
-                    try:
-                        nh = int(next_hop_port)
-                        self.add_fib(dest, nh, exp_time=5000, hop_count=1)
-                        print(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
-                        self.log(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
-                        # resolve buffered entries for this dest and forward immediately
-                        with self.buffer_lock:
-                            to_remove = []
-                            for entry in list(self.buffer):
-                                if entry["destination"] == dest:
-                                    entry["status"] = "resolved"
-                                    entry["next_hop"] = nh
-                                    try:
-                                        self.sock.sendto(entry["packet"], ("127.0.0.1", nh))
-                                        print(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
-                                        self.log(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
-                                    except Exception as e:
-                                        print(f"[{self.name}] Error forwarding buffered INTEREST to {nh}: {e}")
-                                    to_remove.append(entry)
-                            for entry in to_remove:
-                                if entry in self.buffer:
-                                    self.buffer.remove(entry)
-                    except Exception as e:
-                        print(f"[{self.name}] Error storing FIB from NS reply: {e}")
-                else:
-                    print(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
-                    self.log(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
-
-            self.add_fib(pkt_obj.name, addr[1], exp_time=5000, hop_count=len(pkt_obj.path))
-            return pkt_obj
+            # Only process if origin_name matches this node
+            if origin_name == self.name:
+                if isinstance(route_info, dict) and ("next_hop" in route_info or "next_hop_port" in route_info):
+                    dest = route_info.get("dest")
+                    next_hop = route_info.get("next_hop")
+                    next_hop_port = None
+                    # Try to get next_hop_port from FIB if next_hop is a node name
+                    if next_hop:
+                        fib_entry = self.fib.get(next_hop)
+                        if fib_entry:
+                            next_hop_port = fib_entry["NextHops"]
+                    if not next_hop_port:
+                        # fallback to next_hop_port in route_info
+                        next_hop_port = route_info.get("next_hop_port")
+                    if dest and next_hop_port:
+                        try:
+                            nh = int(next_hop_port)
+                            self.add_fib(dest, nh, exp_time=5000, hop_count=1)
+                            print(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
+                            self.log(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
+                            # resolve buffered entries for this dest and forward immediately
+                            with self.buffer_lock:
+                                to_remove = []
+                                for entry in list(self.buffer):
+                                    if entry["destination"] == dest:
+                                        entry["status"] = "resolved"
+                                        entry["next_hop"] = nh
+                                        try:
+                                            self.sock.sendto(entry["packet"], ("127.0.0.1", nh))
+                                            print(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
+                                            self.log(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
+                                        except Exception as e:
+                                            print(f"[{self.name}] Error forwarding buffered INTEREST to {nh}: {e}")
+                                        to_remove.append(entry)
+                                for entry in to_remove:
+                                    if entry in self.buffer:
+                                        self.buffer.remove(entry)
+                        except Exception as e:
+                            print(f"[{self.name}] Error storing FIB from NS reply: {e}")
+                    else:
+                        print(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
+                        self.log(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
+                self.add_fib(pkt_obj.name, addr[1], exp_time=5000, hop_count=len(pkt_obj.path))
+                return pkt_obj
+            else:
+                # If not for this node, forward the ROUTING_DATA packet to PIT entries
+                print(f"[{self.name}] ROUTING_DATA origin_name mismatch ({origin_name}), forwarding to PIT entries.")
+                self.log(f"[{self.name}] ROUTING_DATA origin_name mismatch ({origin_name}), forwarding to PIT entries.")
+                for pit_entry in self.pit.values():
+                    if isinstance(pit_entry, list):
+                        for port in pit_entry:
+                            try:
+                                self.sock.sendto(packet, ("127.0.0.1", port))
+                                print(f"[{self.name}] Forwarded ROUTING_DATA to PIT port {port}")
+                                self.log(f"[{self.name}] Forwarded ROUTING_DATA to PIT port {port}")
+                            except Exception as e:
+                                print(f"[{self.name}] Error forwarding ROUTING_DATA to PIT port {port}: {e}")
+                return pkt_obj
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
             self.log(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
