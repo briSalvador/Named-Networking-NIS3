@@ -32,24 +32,24 @@ def create_data_packet(seq_num, name, payload, flags=0x0):
     header = struct.pack("!BBBB", packet_type_flags, seq_num, payload_size, name_length)
     return header + name_bytes + payload_bytes
 
-def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
-        packet_type = ROUTING_DATA
-        packet_type_flags = (packet_type << 4) | (flags & 0xF)
-        seq_num = seq_num & 0xFF
-        name_bytes = name.encode("utf-8")
-        name_length = len(name_bytes) & 0xFF
-        # routing_info is a path (list of node names)
-        if isinstance(routing_info, list):
-            # Convert list to comma-separated string
-            routing_info_str = ",".join(routing_info)
-            routing_info_bytes = routing_info_str.encode("utf-8")
-        elif isinstance(routing_info, str):
-            routing_info_bytes = routing_info.encode("utf-8")
-        else:
-            routing_info_bytes = routing_info
-        info_size = len(routing_info_bytes) & 0xFF
-        header = struct.pack("!BBBB", packet_type_flags, seq_num, info_size, name_length)
-        return header + name_bytes + routing_info_bytes
+def create_route_data_packet(seq_num, name, payload, flags=0x0):
+    packet_type = ROUTING_DATA
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    seq_num = seq_num & 0xFF
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes)
+
+    # payload should be a dict with at least 'origin_name' and 'path' fields
+    if isinstance(payload, dict):
+        payload_json = json.dumps(payload)
+        payload_bytes = payload_json.encode("utf-8")
+    else:
+        payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
+    payload_size = len(payload_bytes) & 0xFF
+
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, payload_size, name_length)
+    return header + name_bytes + payload_bytes
 
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
@@ -249,6 +249,14 @@ class NameServer:
         self.name_to_port[node_name] = addr[1]
         print(f"[NS {self.ns_name}] UPDATE from {node_name} at {addr}")
 
+    def strip_last_level(self, path):
+            if not path:
+                return path
+            segments = path.strip('/').split('/')
+            if len(segments) > 1:
+                return '/' + '/'.join(segments[:-1])
+            return path
+
     def _handle_interest(self, packet, addr):
         """
         Treat interest as a route request.
@@ -259,10 +267,9 @@ class NameServer:
         """
         parsed = parse_interest_packet(packet)
         dest_name = parsed["Name"]
-        print(f"[NS {self.ns_name}] origin node: {parsed['OriginNode']}")
         seq_num = parsed["SequenceNumber"]
 
-        src_name = self.port_to_name.get(addr[1])
+        src_name = parsed["OriginNode"]
         if not src_name:
             # don't know who this is
             print(f"[NS {self.ns_name}] INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")
@@ -270,32 +277,29 @@ class NameServer:
 
         print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name}")
 
+        original_name = dest_name
+        dest_name = self.strip_last_level(dest_name)
         path = self._shortest_path(src_name, dest_name)
         if not path:
-            route_name = f"{self.ns_name}/Route({dest_name})"
+            route_name = dest_name
             payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_name}
             payload = json.dumps(payload_obj)
-            resp = create_data_packet(seq_num=seq_num, name=route_name, payload=payload, flags=ACK_FLAG)
+            resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=payload, flags=ACK_FLAG)
             self.sock.sendto(resp, addr)
             print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
             return
 
         next_hop = path[1] if len(path) >= 2 else dest_name
-        next_hop_port = self.name_to_port.get(next_hop)  # may be None
-
-        route_name = f"{self.ns_name}/Route({dest_name})"
-        payload_obj = {
-            "ok": True,
-            "src": src_name,
-            "dest": dest_name,
+        origin_name = parsed["OriginNode"]
+        route_payload = {
+            "origin_name": origin_name,
             "path": path,
+            "dest": original_name,
             "next_hop": next_hop,
-            "next_hop_port": next_hop_port
         }
-        payload = json.dumps(payload_obj)
-        resp = create_data_packet(seq_num=seq_num, name=route_name, payload=payload, flags=ACK_FLAG)
+        resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
         self.sock.sendto(resp, addr)
-        print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}, port={next_hop_port}) to {addr}")
+        print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
 
     def _shortest_path(self, src, dest):
         if src not in self.graph or dest not in self.graph:
