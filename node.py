@@ -242,6 +242,12 @@ def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
     return header + name_bytes + routing_info_bytes
 
 class Node:
+    def log(self, message):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        if not hasattr(self, 'logs'):
+            self.logs = []
+        self.logs.append({"timestamp": timestamp, "message": message})
+
     def load_neighbors_from_file(self, filename):
         try:
             with open(filename, 'r') as f:
@@ -258,12 +264,15 @@ class Node:
                             try:
                                 pkt = create_hello_packet(self.name)
                                 self.sock.sendto(pkt, (self.host, int(port)))
+                                #self.log(f"[{self.name}] Sent HELLO packet to {self.host}:{port}")
                                 print(f"[{self.name}] Sent HELLO packet to {self.host}:{port}")
                             except Exception as e:
                                 print(f"[{self.name}] Error sending HELLO packet to {self.host}:{port}: {e}")
+                                #self.log(f"[{self.name}] Error sending HELLO packet to {self.host}:{port}: {e}")
                         print(f"[{self.name}] Loaded neighbors from {filename}: {ports}")
         except Exception as e:
             print(f"[{self.name}] Error loading neighbors from {filename}: {e}")
+            self.log(f"[{self.name}] Error loading neighbors from {filename}: {e}")
 
     def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999):
         self.name = name
@@ -283,20 +292,21 @@ class Node:
         # Tables
         self.fib = {} # {name: {"NextHops": [port, ...], "ExpirationTime": ...}}
         self.cs = {}
+        self.logs = []  # List to store log entries
         self.pit = {}
         self.fragment_buffer = {}
         self.fib_interfaces = []
         self.pit_interfaces = []
         self.name_to_port = {}  # Mapping from node names to their ports
 
-        print(f"[{self.name}] Node started at {self.host}:{self.port} in domain(s): {self.domains}")
+        self.log(f"Node started at {self.host}:{self.port} in domain(s): {self.domains}")
 
         # Start background threads for listening
         self.running = True
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
         self.listener_thread.start()
 
-         # Buffer and Queueing (FIFO)
+        # Buffer and Queueing (FIFO)
         self.buffer = deque()  
         self.buffer_lock = threading.Lock()
         self.buffer_thread = threading.Thread(target=self._process_buffer_loop, daemon=True)
@@ -406,6 +416,7 @@ class Node:
         pkt = create_interest_packet(seq_num, name, flags)
         self.sock.sendto(pkt, target)
         print(f"[{self.name}] Sent INTEREST packet to {target}")
+        self.log(f"[{self.name}] Sent INTEREST packet to {target}")
         return pkt
 
     def send_data(self, seq_num, name, payload, flags=0x0, target=("127.0.0.1", 0)):
@@ -420,10 +431,12 @@ class Node:
                 pkt = create_data_packet(seq_num, name, frag_payload, flags | TRUNC_FLAG, i+1, total_fragments)
                 self.sock.sendto(pkt, target)
                 print(f"[{self.name}] Sent DATA fragment {i+1}/{total_fragments} to {target}")
+                self.log(f"[{self.name}] Sent DATA fragment {i+1}/{total_fragments} to {target}")
         else:
             pkt = create_data_packet(seq_num, name, payload, flags, 1, 1)
             self.sock.sendto(pkt, target)
             print(f"[{self.name}] Sent DATA packet to {target}")
+            self.log(f"[{self.name}] Sent DATA packet to {target}")
         return True
     
     def add_fib(self, name, interface, exp_time, hop_count):
@@ -443,7 +456,7 @@ class Node:
 
         """ if interface not in self.fib[name]["NextHops"]:
             self.fib[name]["NextHops"].append(interface) """
-        #print(f"[{self.name}] FIB updated: {self.fib}")
+        self.log(f"[{self.name}] FIB updated: {self.fib}")
 
     def get_next_hops(self, name):
         """Return a list of next hop ports for a given name/prefix."""
@@ -459,10 +472,12 @@ class Node:
                 pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
                 self.sock.sendto(pkt, ("127.0.0.1", port))
                 print(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
+                self.log(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
         else:
             pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
             self.sock.sendto(pkt, target)
             print(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
+            self.log(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
 
     def receive_packet(self, packet, addr=None):
         # Peek packet type
@@ -484,6 +499,10 @@ class Node:
             print(f"[{self.name}] Received INTEREST from port {addr[1]} at {timestamp}")
             print(f"  Parsed: {parsed}")
             print(f"  Object: {pkt_obj}")
+            
+            self.log(f"[{self.name}] Received INTEREST from port {addr[1]} at {timestamp}")
+            self.log(f"  Parsed: {parsed}")
+            self.log(f"  Object: {pkt_obj}")
 
             # Check tables
             table, data = self.check_tables(parsed["Name"])
@@ -497,13 +516,16 @@ class Node:
                 self.pit_interfaces.append(addr[1])
                 self.pit[pkt_obj.name] = list(self.pit_interfaces)
                 print(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
+                self.log(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
             elif pkt_obj.name in self.pit:
                 self.pit_interfaces.append(addr[1])
                 self.pit[pkt_obj.name] = list(self.pit_interfaces)
                 print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
+                self.log(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
             if table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
+                self.log(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.send_data(
                     seq_num=pkt_obj.seq_num,
                     name=pkt_obj.name,
@@ -522,6 +544,7 @@ class Node:
                 
                 next_hop = data["NextHops"]
                 print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
+                self.log(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
                 self.forward_interest(pkt_obj, ("127.0.0.1", next_hop))
 
             # Add code that forwards the interest packet to the NS
@@ -543,11 +566,11 @@ class Node:
                 if frag_key not in self.fragment_buffer:
                     self.fragment_buffer[frag_key] = [None] * parsed["TotalFragments"]
                 self.fragment_buffer[frag_key][parsed["FragmentNum"]-1] = parsed["Payload"]
-                print(f"[{self.name}] Received DATA fragment {parsed['FragmentNum']}/{parsed['TotalFragments']} from {addr}")
+                self.log(f"Received DATA fragment {parsed['FragmentNum']}/{parsed['TotalFragments']} from {addr}")
                 if all(frag is not None for frag in self.fragment_buffer[frag_key]):
                     # All fragments received, reassemble
                     full_payload = ''.join(self.fragment_buffer[frag_key])
-                    print(f"[{self.name}] All fragments received. Reassembled payload: {full_payload}")
+                    self.log(f"All fragments received. Reassembled payload: {full_payload}")
                     # Add to CS
                     # TODO: Add to FIB with proper hop count and next hop
                     self.add_cs(name, full_payload)
@@ -557,13 +580,13 @@ class Node:
                         for interface in interfaces:
                             pkt = create_data_packet(parsed["SequenceNumber"], name, full_payload, parsed["Flags"], 1, 1)
                             self.sock.sendto(pkt, (self.host, interface))
-                            print(f"[{self.name}] Forwarded reassembled DATA to PIT interface {interface}")
+                            self.log(f"Forwarded reassembled DATA to PIT interface {interface}")
                             self.remove_pit(name, interface)
                     del self.fragment_buffer[frag_key]
             else:
-                print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
-                print(f"[{self.name}] Parsed: {parsed}")
-                print(f"[{self.name}] Object: {pkt_obj}")
+                self.log(f"Received DATA from {addr} at {timestamp}")
+                self.log(f"Parsed: {parsed}")
+                self.log(f"Object: {pkt_obj}")
                 self.add_cs(name, parsed["Payload"])
                 # Forward to all PIT interfaces and remove them after
                 if name in self.pit:
@@ -571,7 +594,7 @@ class Node:
                     for interface in interfaces:
                         pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
                         self.sock.sendto(pkt, (self.host, interface))
-                        print(f"[{self.name}] Forwarded DATA to PIT interface {interface}")
+                        self.log(f"Forwarded DATA to PIT interface {interface}")
                         self.remove_pit(name, interface)
 
             return pkt_obj
@@ -581,6 +604,7 @@ class Node:
             self.neighbor_table[neighbor_name] = timestamp
             self.name_to_port[neighbor_name] = addr[1]
             print(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
+            self.log(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
 
             if parsed["Flags"] == 0x0:
                 sender_domains = get_domains_from_name(neighbor_name)
@@ -629,10 +653,12 @@ class Node:
                 raw_routing_info=parsed.get("RawRoutingInfo", "")
             )
             print(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
+            self.log(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
             self.add_fib(pkt_obj.name, addr[1], exp_time=5000, hop_count=len(pkt_obj.path))
             return pkt_obj
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
+            self.log(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
     
     def get_neighbors(self):
         return self.neighbor_table
@@ -646,7 +672,8 @@ class Node:
                 stale.append(addr)
         for addr in stale:
             del self.neighbor_table[addr]
-            print(f"[{self.name}] Removed stale neighbor {addr}") 
+            print(f"[{self.name}] Removed stale neighbor {addr}")
+            self.log(f"[{self.name}] Removed stale neighbor {addr}")
     
     def stop(self):
         self.running = False
@@ -677,13 +704,16 @@ class Node:
             if interface is None:
                 del self.pit[name]
                 print(f"[{self.name}] Removed {name} from PIT.")
+                self.log(f"[{self.name}] Removed {name} from PIT.")
             else:
                 if interface in self.pit[name]:
                     self.pit[name].remove(interface)
                     print(f"[{self.name}] Removed interface {interface} from PIT entry {name}.")
+                    self.log(f"[{self.name}] Removed interface {interface} from PIT entry {name}.")
                 if not self.pit[name]:
                     del self.pit[name]
                     print(f"[{self.name}] Removed {name} from PIT (no interfaces left).")
+                    self.log(f"[{self.name}] Removed {name} from PIT (no interfaces left).")
 
     def levenshtein_distance(self, s1, s2):
         # Exclude '/' from both strings before comparison
@@ -763,8 +793,10 @@ class Node:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
             self.neighbor_table[key] = timestamp
             print(f"[{self.name}] Added neighbor {key} to neighbor_table.")
+            self.log(f"[{self.name}] Added neighbor {key} to neighbor_table.")
         else:
             print(f"[{self.name}] Neighbor {key} already exists in neighbor_table.")
+            self.log(f"[{self.name}] Neighbor {key} already exists in neighbor_table.")
 
     def send_ns_update_to_domain_neighbors(self, sender_name, sender_domains, ns_update_packet, exclude_port=None):
         """

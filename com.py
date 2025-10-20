@@ -49,9 +49,6 @@ if __name__ == "__main__":
     # load all nodes
     for node in nodes:
         node.load_neighbors_from_file("neighbors.txt")
-
-    dpc1.send_interest(seq_num=1, name="sensor/data", flags=ACK_FLAG, target=("127.0.0.1", 5002))
-
     time.sleep(2)
 
     # neighbor tables
@@ -92,8 +89,12 @@ if __name__ == "__main__":
     time.sleep(4)
 
     # Interest Testing (Levenshtein Distance)
-    dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
-    goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hellow.txt", target=("127.0.0.1", 5004))
+    dpc1.send_interest(seq_num=0, name="/DLSU/Gokongwei/hello.txt", target=("127.0.0.1", 5002))
+    goks.add_cs("/DLSU/Gokongwei/hello.txt", "Hello from GOks!")
+    """ dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
+    miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
+    goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
+    goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5004)) """
     #henry.send_interest(seq_num=0, name="/DLSU/Andrew", target=("127.0.0.1", 5006))
     time.sleep(2)
 
@@ -104,8 +105,23 @@ if __name__ == "__main__":
     print("dlsu FIB:", dlsu.fib)
     print("border router FIB: ", dxa.fib)
 
+    print("\n--- PIT Tables ---")
+    print("henry PIT:", henry.pit)
+    print("miguel PIT: ", miguel.pit)
+    print("dlsu PIT:", dlsu.pit)
+
 # DEBUGGING MENU 
 class DebugController:
+    def print_sorted_logs(self, node_names):
+        selected_nodes = [self.nodes[name] for name in node_names if name in self.nodes]
+        all_logs = []
+        for node in selected_nodes:
+            for entry in getattr(node, 'logs', []):
+                all_logs.append({"node": getattr(node, 'name', getattr(node, 'ns_name', 'Unknown')), "timestamp": entry["timestamp"], "message": entry["message"]})
+        all_logs.sort(key=lambda x: x["timestamp"])
+        for log in all_logs:
+            print(f"[{log['timestamp']}]: {log['message']}")
+
     def __init__(self, nodes):
         self.nodes = {}
         for n in nodes:
@@ -157,7 +173,7 @@ class DebugController:
     def process_command(self, cmd):
         parts = cmd.strip().split()
         if not parts:
-            return
+            return False
         match parts[0]:
             case "list":
                 self.list_nodes()
@@ -177,6 +193,11 @@ class DebugController:
                 print("[DEBUG] Exiting debug input thread...")
                 self.command_queue.put("exit")
                 return True
+            case "filter":
+                if len(parts) > 1:
+                    self.print_sorted_logs(parts[1:])
+                else:
+                    print("[DEBUG] Usage: filter <node_name> <node_name> ...")
             case _:
                 print("[DEBUG] Unknown command. Type 'help' for options.")
         return False
