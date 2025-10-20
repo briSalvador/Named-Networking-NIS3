@@ -53,7 +53,13 @@ def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
 
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
-    name = packet[3:3+name_length].decode("utf-8")
+    name_start = 3
+    name_end = name_start + name_length
+    name = packet[name_start:name_end].decode("utf-8")
+    origin_length = packet[name_end]
+    origin_start = name_end + 1
+    origin_end = origin_start + origin_length
+    origin_node = packet[origin_start:origin_end].decode("utf-8")
 
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
@@ -64,6 +70,7 @@ def parse_interest_packet(packet):
         "SequenceNumber": seq_num,
         "NameLength": name_length,
         "Name": name,
+        "OriginNode": origin_node,
     }
 
 def parse_hello_packet(packet):
@@ -89,12 +96,21 @@ def create_hello_packet(name):
     return packet
 
 def parse_update_packet(packet):
-    packet_type_flags, name_length = struct.unpack("!BB", packet[:2])
-    name = packet[2:2+name_length].decode("utf-8")
+    packet_type_flags, name_length, update_info_length = struct.unpack("!BBH", packet[:4])
+    name = packet[4:4+name_length].decode("utf-8")
+    update_info_start = 4 + name_length
+    update_info_end = update_info_start + update_info_length
+    update_info = packet[update_info_start:update_info_end].decode("utf-8")
+    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
+    parts = update_info.split()
+    next_hop = parts[1] if len(parts) > 1 else None
+    number_of_hops = int(parts[2]) if len(parts) > 2 else None
     return {
         "PacketType": (packet_type_flags >> 4) & 0xF,
         "Flags": packet_type_flags & 0xF,
-        "Name": name
+        "Name": name,
+        "NextHop": next_hop,
+        "NumberOfHops": number_of_hops
     }
 
 class NameServer:
@@ -217,7 +233,7 @@ class NameServer:
         node_name = parsed["Name"]
         flags = parsed["Flags"]
 
-        self.port_to_name[addr] = node_name
+        self.port_to_name[addr[1]] = node_name
         self.name_to_port[node_name] = addr[1]
 
         if flags == ACK_FLAG:
@@ -229,7 +245,7 @@ class NameServer:
     def _handle_update(self, packet, addr):
         parsed = parse_update_packet(packet)
         node_name = parsed["Name"]
-        self.port_to_name[addr] = node_name
+        self.port_to_name[addr[1]] = node_name
         self.name_to_port[node_name] = addr[1]
         print(f"[NS {self.ns_name}] UPDATE from {node_name} at {addr}")
 
@@ -243,9 +259,10 @@ class NameServer:
         """
         parsed = parse_interest_packet(packet)
         dest_name = parsed["Name"]
+        print(f"[NS {self.ns_name}] origin node: {parsed['OriginNode']}")
         seq_num = parsed["SequenceNumber"]
 
-        src_name = self.port_to_name.get(addr)
+        src_name = self.port_to_name.get(addr[1])
         if not src_name:
             # don't know who this is
             print(f"[NS {self.ns_name}] INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")

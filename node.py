@@ -29,7 +29,7 @@ FRAGMENT_SIZE = 1500
 # FIB: Add hop count for FIB entries so that new routes are compared with existing ones and replaced
 # if new route is shorter.
 
-def create_interest_packet(seq_num, name, flags=0x0):
+def create_interest_packet(seq_num, name, flags=0x0, origin_node=""):
     packet_type = INTEREST
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
 
@@ -37,8 +37,12 @@ def create_interest_packet(seq_num, name, flags=0x0):
     name_bytes = name.encode("utf-8")
     name_length = len(name_bytes)
 
+    origin_bytes = origin_node.encode("utf-8")
+    origin_length = len(origin_bytes)
+
+    # Add origin_length as 1 byte after name
     header = struct.pack("!BBB", packet_type_flags, seq_num, name_length)
-    packet = header + name_bytes
+    packet = header + name_bytes + struct.pack("!B", origin_length) + origin_bytes
     return packet
 
 def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_fragments=1):
@@ -58,7 +62,13 @@ def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_
 
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
-    name = packet[3:3+name_length].decode("utf-8")
+    name_start = 3
+    name_end = name_start + name_length
+    name = packet[name_start:name_end].decode("utf-8")
+    origin_length = packet[name_end]
+    origin_start = name_end + 1
+    origin_end = origin_start + origin_length
+    origin_node = packet[origin_start:origin_end].decode("utf-8")
 
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
@@ -69,6 +79,7 @@ def parse_interest_packet(packet):
         "SequenceNumber": seq_num,
         "NameLength": name_length,
         "Name": name,
+        "OriginNode": origin_node,
     }
 
 def parse_data_packet(packet):
@@ -412,7 +423,7 @@ class Node:
             time.sleep(1)
 
     def send_interest(self, seq_num, name, flags=0x0, target=("127.0.0.1", 0)):
-        pkt = create_interest_packet(seq_num, name, flags)
+        pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name)
         self.sock.sendto(pkt, target)
         print(f"[{self.name}] Sent INTEREST packet to {target}")
         self.log(f"[{self.name}] Sent INTEREST packet to {target}")
@@ -468,12 +479,12 @@ class Node:
                 return
             # NextHops stored as single interface (int)
             port = next_hops
-            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
+            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags, origin_node=getattr(pkt_obj, 'origin_node', self.name))
             self.sock.sendto(pkt, ("127.0.0.1", int(port)))
             print(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
             self.log(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
         else:
-            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags)
+            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags, origin_node=getattr(pkt_obj, 'origin_node', self.name))
             self.sock.sendto(pkt, target)
             print(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
             self.log(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
@@ -505,7 +516,7 @@ class Node:
                     if fib_entry:
                         ns_port = fib_entry["NextHops"]
                         try:
-                            self.sock.sendto(create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"]), ("127.0.0.1", int(ns_port)))
+                            self.sock.sendto(create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed.get("OriginNode", self.name)), ("127.0.0.1", int(ns_port)))
                             print(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
                             self.log(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
                             # mark buffered entries as forwarded to NS
