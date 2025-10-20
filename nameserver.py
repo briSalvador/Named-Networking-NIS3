@@ -267,6 +267,7 @@ class NameServer:
         """
         parsed = parse_interest_packet(packet)
         dest_name = parsed["Name"]
+
         seq_num = parsed["SequenceNumber"]
 
         src_name = parsed["OriginNode"]
@@ -293,11 +294,17 @@ class NameServer:
         origin_name = parsed["OriginNode"]
         route_payload = {
             "origin_name": origin_name,
+
+
+
+
             "path": path,
             "dest": original_name,
             "next_hop": next_hop,
+
         }
         resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
+
         self.sock.sendto(resp, addr)
         print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
 
