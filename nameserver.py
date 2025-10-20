@@ -54,8 +54,10 @@ def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
     name = packet[3:3+name_length].decode("utf-8")
+
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
+
     return {
         "PacketType": packet_type,
         "Flags": flags,

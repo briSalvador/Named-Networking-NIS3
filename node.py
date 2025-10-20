@@ -502,22 +502,24 @@ class Node:
                 dest_domain = parsed["Name"].lstrip('/').split('/')[0] if parsed["Name"].startswith('/') else None
                 if dest_domain and dest_domain in self.domains:
                     ns_name = f"/{dest_domain}/NameServer1"
-                    ns_port = self.name_to_port.get(ns_name)
-                    if ns_port:
+                    fib_entry = self.fib.get(ns_name)
+                    if fib_entry:
+                        ns_port = fib_entry["NextHops"]
                         try:
                             self.sock.sendto(create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"]), ("127.0.0.1", int(ns_port)))
-                            print(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} at port {ns_port}")
-                            self.log(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} at port {ns_port}")
+                            print(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
+                            self.log(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
                             # mark buffered entries as forwarded to NS
                             with self.buffer_lock:
                                 for entry in self.buffer:
                                     if entry["destination"] == parsed["Name"]:
                                         entry["forwarded_to_ns"] = True
                         except Exception as e:
-                            print(f"[{self.name}] Error forwarding INTEREST to NS: {e}")
+                            print(f"[{self.name}] Error forwarding INTEREST to NS via FIB: {e}")
+                            self.log(f"[{self.name}] Error forwarding INTEREST to NS via FIB: {e}")
                     else:
-                        print(f"[{self.name}] No known NameServer port for domain {dest_domain} (ns_name={ns_name})")
-                        self.log(f"[{self.name}] No known NameServer port for domain {dest_domain} (ns_name={ns_name})")
+                        print(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
+                        self.log(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
                 return  # buffer unknown routes
 
             # existing PIT/CS handling
@@ -638,6 +640,10 @@ class Node:
                     self.log(f"Received DATA from {addr} at {timestamp}")
                     self.log(f"Parsed: {parsed}")
                     self.log(f"Object: {pkt_obj}")
+                    
+                    print(f"Received DATA from {addr} at {timestamp}")
+                    print(f"Parsed: {parsed}")
+                    print(f"Object: {pkt_obj}")
                     self.add_cs(name, parsed["Payload"])
                     if name in self.pit:
                         interfaces = list(self.pit[name])
@@ -688,6 +694,7 @@ class Node:
                 self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
                                                         ns_update_packet, exclude_port=addr[1])
                 self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=hops)
+                self.name_to_port[neighbor_name] = addr[1]
             else:
                 # Normal UPDATE, no cooldown
                 self.neighbor_table[neighbor_name] = timestamp
@@ -801,37 +808,12 @@ class Node:
             if name == key:
                 return "PIT", self.pit[key]
 
-        # 3. FIB: Longest prefix match, then Levenshtein among those, else Levenshtein <= 3
-        prefix_matches = []
-        max_prefix_len = 0
-        for key in self.fib.keys():
-            if name.startswith(key):
-                if len(key) > max_prefix_len:
-                    max_prefix_len = len(key)
-                    prefix_matches = [key]
-                elif len(key) == max_prefix_len:
-                    prefix_matches.append(key)
-
-        if prefix_matches:
-            # If only one, use it. If multiple, use Levenshtein to find the closest
-            if len(prefix_matches) == 1:
-                return "FIB", self.fib[prefix_matches[0]]
-            else:
-                best_key = None
-                best_score = float('inf')
-                for key in prefix_matches:
-                    score = self.levenshtein_distance(name, key)
-                    if score < best_score:
-                        best_score = score
-                        best_key = key
-                return "FIB", self.fib[best_key]
-
-        # FIB: Levenshtein <= 3 among all FIB entries
+        # 3. FIB: Only use FIB entry if Levenshtein score < 2
         best_key = None
         best_score = float('inf')
         for key in self.fib.keys():
             score = self.levenshtein_distance(name, key)
-            if score <= 3 and score < best_score:
+            if score < 2 and score < best_score:
                 best_score = score
                 best_key = key
         if best_key is not None:
