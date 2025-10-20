@@ -456,7 +456,6 @@ class Node:
         self.log(f"[{self.name}] FIB updated: {self.fib}")
 
     def get_next_hops(self, name):
-        """Return a list of next hop ports for a given name/prefix."""
         if name in self.fib:
             return self.fib[name]["NextHops"]
         return
@@ -640,7 +639,7 @@ class Node:
                     self.log(f"Received DATA from {addr} at {timestamp}")
                     self.log(f"Parsed: {parsed}")
                     self.log(f"Object: {pkt_obj}")
-                    
+
                     print(f"Received DATA from {addr} at {timestamp}")
                     print(f"Parsed: {parsed}")
                     print(f"Object: {pkt_obj}")
@@ -808,11 +807,21 @@ class Node:
             if name == key:
                 return "PIT", self.pit[key]
 
-        # 3. FIB: Only use FIB entry if Levenshtein score < 2
+        # 3. FIB: Match interest name with FIB entry except last level (data name)
+        def strip_last_level(path):
+            if not path:
+                return path
+            segments = path.strip('/').split('/')
+            if len(segments) > 1:
+                return '/' + '/'.join(segments[:-1])
+            return path
+
+        fib_interest = strip_last_level(name)
         best_key = None
         best_score = float('inf')
         for key in self.fib.keys():
-            score = self.levenshtein_distance(name, key)
+            fib_key = strip_last_level(key)
+            score = self.levenshtein_distance(fib_interest, fib_key)
             if score < 2 and score < best_score:
                 best_score = score
                 best_key = key
