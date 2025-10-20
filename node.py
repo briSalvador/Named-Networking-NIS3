@@ -209,8 +209,26 @@ def parse_route_data_packet(packet):
     except Exception:
         routing_info_decoded = routing_info
 
-    # routing_info is a comma-separated path
-    path = routing_info_decoded.split(",") if routing_info_decoded else []
+    # Try to parse as JSON if possible
+    try:
+        routing_info_json = json.loads(routing_info_decoded)
+    except Exception:
+        routing_info_json = None
+
+    # Extract all relevant fields from the new route data packet format
+    path = []
+    origin_name = None
+    dest = None
+    next_hop = None
+    next_hop_port = None
+    if isinstance(routing_info_json, dict):
+        path = routing_info_json.get("path", [])
+        origin_name = routing_info_json.get("origin_name")
+        dest = routing_info_json.get("dest")
+        next_hop = routing_info_json.get("next_hop")
+        next_hop_port = routing_info_json.get("next_hop_port")
+    elif isinstance(routing_info_decoded, str) and "," in routing_info_decoded:
+        path = routing_info_decoded.split(",")
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
 
@@ -222,8 +240,13 @@ def parse_route_data_packet(packet):
         "NameLength": name_length,
         "Name": name,
         "Path": path,
+        "OriginName": origin_name,
+        "Dest": dest,
+        "NextHop": next_hop,
+        "NextHopPort": next_hop_port,
         "RoutingInfo": routing_info_decoded,
-        "RawRoutingInfo": routing_info
+        "RawRoutingInfo": routing_info,
+        "RoutingInfoJson": routing_info_json
     }
 
 
@@ -506,6 +529,19 @@ class Node:
 
             table, data = self.check_tables(parsed["Name"])
 
+            # existing PIT/CS handling
+            if pkt_obj.name not in self.pit:
+                self.pit_interfaces.append(addr[1])
+                self.pit[pkt_obj.name] = list(self.pit_interfaces)
+                print(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
+                self.log(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
+            else:
+                if addr[1] not in self.pit_interfaces:
+                    self.pit_interfaces.append(addr[1])
+                    self.pit[pkt_obj.name] = list(self.pit_interfaces)
+                    print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
+                    self.log(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
+
             if table is None:
                 # Add to buffer and forward to domain NameServer if the name is within node's domain(s)
                 self.add_to_buffer(packet, addr, reason="No FIB route available")
@@ -531,19 +567,6 @@ class Node:
                         print(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
                         self.log(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
                 return  # buffer unknown routes
-
-            # existing PIT/CS handling
-            if pkt_obj.name not in self.pit:
-                self.pit_interfaces.append(addr[1])
-                self.pit[pkt_obj.name] = list(self.pit_interfaces)
-                print(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
-                self.log(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
-            else:
-                if addr[1] not in self.pit_interfaces:
-                    self.pit_interfaces.append(addr[1])
-                    self.pit[pkt_obj.name] = list(self.pit_interfaces)
-                    print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
-                    self.log(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
             if table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
@@ -575,18 +598,6 @@ class Node:
             frag_key = (parsed["SequenceNumber"], parsed["Name"])
             name = parsed["Name"]
 
-            # If this DATA is a route reply from a NameServer, attempt to parse JSON and act
-            is_route_reply = False
-            route_info = None
-            try:
-                payload_json = json.loads(parsed["Payload"])
-                # expected fields: ok, src, dest, path, next_hop, next_hop_port
-                if "next_hop" in payload_json or "next_hop_port" in payload_json:
-                    is_route_reply = True
-                    route_info = payload_json
-            except Exception:
-                is_route_reply = False
-
             # Fragmentation handling for large DATA
             if parsed["TotalFragments"] > 1:
                 if frag_key not in self.fragment_buffer:
@@ -607,61 +618,22 @@ class Node:
                             self.remove_pit(name, interface)
                     del self.fragment_buffer[frag_key]
             else:
-                # Non-fragmented DATA
-                # If this is a route reply from NS, install FIB entry and forward pending Interests
-                if is_route_reply and route_info:
-                    dest = route_info.get("dest")
-                    next_hop_port = route_info.get("next_hop_port")
-                    # If next_hop_port is None in payload it may be null -> skip
-                    if dest and next_hop_port:
-                        try:
-                            nh = int(next_hop_port)
-                            # store next-hop for destination in FIB
-                            self.add_fib(dest, nh, exp_time=5000, hop_count=1)
-                            print(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
-                            self.log(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
-                            # resolve buffered entries for this dest and forward immediately
-                            with self.buffer_lock:
-                                to_remove = []
-                                for entry in list(self.buffer):
-                                    if entry["destination"] == dest:
-                                        entry["status"] = "resolved"
-                                        entry["next_hop"] = nh
-                                        # forward the original Interest now
-                                        try:
-                                            self.sock.sendto(entry["packet"], ("127.0.0.1", nh))
-                                            print(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
-                                            self.log(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
-                                        except Exception as e:
-                                            print(f"[{self.name}] Error forwarding buffered INTEREST to {nh}: {e}")
-                                        to_remove.append(entry)
-                                # remove forwarded entries
-                                for entry in to_remove:
-                                    if entry in self.buffer:
-                                        self.buffer.remove(entry)
-                        except Exception as e:
-                            print(f"[{self.name}] Error storing FIB from NS reply: {e}")
-                    else:
-                        # route not found or unreachable
-                        print(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
-                        self.log(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
-                else:
-                    # Regular DATA from destination: add to CS and forward using PIT
-                    self.log(f"Received DATA from {addr} at {timestamp}")
-                    self.log(f"Parsed: {parsed}")
-                    self.log(f"Object: {pkt_obj}")
-
-                    print(f"Received DATA from {addr} at {timestamp}")
-                    print(f"Parsed: {parsed}")
-                    print(f"Object: {pkt_obj}")
-                    self.add_cs(name, parsed["Payload"])
-                    if name in self.pit:
-                        interfaces = list(self.pit[name])
-                        for interface in interfaces:
-                            pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
-                            self.sock.sendto(pkt, (self.host, interface))
-                            self.log(f"Forwarded DATA to PIT interface {interface}")
-                            self.remove_pit(name, interface)
+                # Regular DATA from destination: add to CS and forward using PIT
+                self.log(f"Received DATA from {addr} at {timestamp}")
+                self.log(f"Parsed: {parsed}")
+                self.log(f"Object: {pkt_obj}")
+                
+                print(f"Received DATA from {addr} at {timestamp}")
+                print(f"Parsed: {parsed}")
+                print(f"Object: {pkt_obj}")
+                self.add_cs(name, parsed["Payload"])
+                if name in self.pit:
+                    interfaces = list(self.pit[name])
+                    for interface in interfaces:
+                        pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
+                        self.sock.sendto(pkt, (self.host, interface))
+                        self.log(f"Forwarded DATA to PIT interface {interface}")
+                        self.remove_pit(name, interface)
 
             return pkt_obj
 
@@ -723,6 +695,51 @@ class Node:
             )
             print(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
             self.log(f"[{self.name}] Received ROUTE DATA from {addr} at {timestamp}")
+
+            # If this ROUTING_DATA is a route reply from NS, parse JSON and act
+
+            route_info = parsed.get("RoutingInfoJson")
+            if isinstance(route_info, dict) and ("next_hop" in route_info or "next_hop_port" in route_info):
+                dest = route_info.get("dest")
+                next_hop = route_info.get("next_hop")
+                next_hop_port = None
+                # Try to get next_hop_port from FIB if next_hop is a node name
+                if next_hop:
+                    fib_entry = self.fib.get(next_hop)
+                    if fib_entry:
+                        next_hop_port = fib_entry["NextHops"]
+                if not next_hop_port:
+                    # fallback to next_hop_port in route_info
+                    next_hop_port = route_info.get("next_hop_port")
+                if dest and next_hop_port:
+                    try:
+                        nh = int(next_hop_port)
+                        self.add_fib(dest, nh, exp_time=5000, hop_count=1)
+                        print(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
+                        self.log(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
+                        # resolve buffered entries for this dest and forward immediately
+                        with self.buffer_lock:
+                            to_remove = []
+                            for entry in list(self.buffer):
+                                if entry["destination"] == dest:
+                                    entry["status"] = "resolved"
+                                    entry["next_hop"] = nh
+                                    try:
+                                        self.sock.sendto(entry["packet"], ("127.0.0.1", nh))
+                                        print(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
+                                        self.log(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
+                                    except Exception as e:
+                                        print(f"[{self.name}] Error forwarding buffered INTEREST to {nh}: {e}")
+                                    to_remove.append(entry)
+                            for entry in to_remove:
+                                if entry in self.buffer:
+                                    self.buffer.remove(entry)
+                    except Exception as e:
+                        print(f"[{self.name}] Error storing FIB from NS reply: {e}")
+                else:
+                    print(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
+                    self.log(f"[{self.name}] Route reply indicates no path to {route_info.get('dest')}")
+
             self.add_fib(pkt_obj.name, addr[1], exp_time=5000, hop_count=len(pkt_obj.path))
             return pkt_obj
         else:
