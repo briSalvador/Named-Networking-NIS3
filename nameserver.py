@@ -53,7 +53,13 @@ def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
 
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
-    name = packet[3:3+name_length].decode("utf-8")
+    name_start = 3
+    name_end = name_start + name_length
+    name = packet[name_start:name_end].decode("utf-8")
+    origin_length = packet[name_end]
+    origin_start = name_end + 1
+    origin_end = origin_start + origin_length
+    origin_node = packet[origin_start:origin_end].decode("utf-8")
 
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
@@ -64,6 +70,7 @@ def parse_interest_packet(packet):
         "SequenceNumber": seq_num,
         "NameLength": name_length,
         "Name": name,
+        "OriginNode": origin_node,
     }
 
 def parse_hello_packet(packet):
@@ -89,26 +96,15 @@ def create_hello_packet(name):
     return packet
 
 def parse_update_packet(packet):
-    """
-    Parse UPDATE / NS-UPDATE packets created by Node.create_update_packet / create_ns_update_packet.
-    Header format used by nodes: !BBH   (packet_type_flags, name_length, update_info_length)
-    update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
-    """
-    if len(packet) < 4:
-        raise ValueError("Update packet too short")
     packet_type_flags, name_length, update_info_length = struct.unpack("!BBH", packet[:4])
-    name_start = 4
-    name_end = name_start + name_length
-    if len(packet) < name_end + update_info_length:
-        raise ValueError("Update packet length mismatch")
-    name = packet[name_start:name_end].decode("utf-8")
-    update_info_start = name_end
+    name = packet[4:4+name_length].decode("utf-8")
+    update_info_start = 4 + name_length
     update_info_end = update_info_start + update_info_length
     update_info = packet[update_info_start:update_info_end].decode("utf-8")
-    # update_info expected: "<name_of_destination> <next_hop_port> <number_of_hops>"
+    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
     parts = update_info.split()
     next_hop = parts[1] if len(parts) > 1 else None
-    number_of_hops = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+    number_of_hops = int(parts[2]) if len(parts) > 2 else None
     return {
         "PacketType": (packet_type_flags >> 4) & 0xF,
         "Flags": packet_type_flags & 0xF,
@@ -237,7 +233,7 @@ class NameServer:
         node_name = parsed["Name"]
         flags = parsed["Flags"]
 
-        self.port_to_name[addr] = node_name
+        self.port_to_name[addr[1]] = node_name
         self.name_to_port[node_name] = addr[1]
 
         if flags == ACK_FLAG:
@@ -249,7 +245,7 @@ class NameServer:
     def _handle_update(self, packet, addr):
         parsed = parse_update_packet(packet)
         node_name = parsed["Name"]
-        self.port_to_name[addr] = node_name
+        self.port_to_name[addr[1]] = node_name
         self.name_to_port[node_name] = addr[1]
         print(f"[NS {self.ns_name}] UPDATE from {node_name} at {addr}")
 
@@ -259,69 +255,39 @@ class NameServer:
         - Source is determined from addr (using HELLO/UPDATE).
         - Name is the destination name.
         - Computes shortest path on graph from topology.txt.
-        - Replies with data. Performs longest-prefix matching so file names
-          (e.g. /DLSU/Miguel/cam1/hello.txt) map to nodes like /DLSU/Miguel/cam1.
+        - Replies with data
         """
         parsed = parse_interest_packet(packet)
-        dest_name_orig = parsed["Name"]
+        dest_name = parsed["Name"]
+        print(f"[NS {self.ns_name}] origin node: {parsed['OriginNode']}")
         seq_num = parsed["SequenceNumber"]
 
-        src_name = self.port_to_name.get(addr)
+        src_name = self.port_to_name.get(addr[1])
         if not src_name:
             # don't know who this is
             print(f"[NS {self.ns_name}] INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")
             src_name = "UNKNOWN"
 
-        # Try to resolve the requested name to a node in the topology using longest-prefix match
-        dest_candidate = dest_name_orig
-        resolved_dest = None
-        # If exact match exists, use it; otherwise strip trailing path components
-        while True:
-            if dest_candidate in self.graph:
-                resolved_dest = dest_candidate
-                break
-            # if no further slash to strip, stop
-            if '/' not in dest_candidate:
-                break
-            # remove trailing component (keep leading slash)
-            dest_candidate = dest_candidate.rsplit('/', 1)[0]
-            # ensure we don't produce an empty string; if root slash removed, break
-            if dest_candidate == '':
-                break
+        print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name}")
 
-        if resolved_dest is None:
-            # Nothing resolved — still proceed to log and answer NotFound
-            print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name_orig} (no matching node in topology)")
-            route_name = f"{self.ns_name}/Route({dest_name_orig})"
-            payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_name_orig}
+        path = self._shortest_path(src_name, dest_name)
+        if not path:
+            route_name = f"{self.ns_name}/Route({dest_name})"
+            payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_name}
             payload = json.dumps(payload_obj)
             resp = create_data_packet(seq_num=seq_num, name=route_name, payload=payload, flags=ACK_FLAG)
             self.sock.sendto(resp, addr)
             print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
             return
 
-        # resolved_dest is a node name in the graph
-        print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name_orig}  (resolved to {resolved_dest})")
-
-        path = self._shortest_path(src_name, resolved_dest)
-        if not path:
-            route_name = f"{self.ns_name}/Route({dest_name_orig})"
-            payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_name_orig, "resolved": resolved_dest}
-            payload = json.dumps(payload_obj)
-            resp = create_data_packet(seq_num=seq_num, name=route_name, payload=payload, flags=ACK_FLAG)
-            self.sock.sendto(resp, addr)
-            print(f"[NS {self.ns_name}] No path to resolved node. Sent DATA(NameNotFound) to {addr}")
-            return
-
-        next_hop = path[1] if len(path) >= 2 else resolved_dest
+        next_hop = path[1] if len(path) >= 2 else dest_name
         next_hop_port = self.name_to_port.get(next_hop)  # may be None
 
-        route_name = f"{self.ns_name}/Route({dest_name_orig})"
+        route_name = f"{self.ns_name}/Route({dest_name})"
         payload_obj = {
             "ok": True,
             "src": src_name,
-            "dest": dest_name_orig,
-            "resolved_dest": resolved_dest,
+            "dest": dest_name,
             "path": path,
             "next_hop": next_hop,
             "next_hop_port": next_hop_port
