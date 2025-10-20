@@ -89,8 +89,8 @@ if __name__ == "__main__":
     time.sleep(4)
 
     # Interest Testing (Levenshtein Distance)
-    dpc1.send_interest(seq_num=0, name="/DLSU/Gokongwei/hello.txt", target=("127.0.0.1", 5002))
-    goks.add_cs("/DLSU/Gokongwei/hello.txt", "Hello from GOks!")
+    dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5002))
+    dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from dcam!")
     """ dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
