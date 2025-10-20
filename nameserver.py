@@ -2,6 +2,7 @@ import socket
 import struct
 import threading
 import time
+import json
 from RouteDataPacket import RouteDataPacket
 from datetime import datetime
 from collections import deque, defaultdict
@@ -253,26 +254,26 @@ class NameServer:
         path = self._shortest_path(src_name, dest_name)
         if not path:
             route_name = f"{self.ns_name}/Route({dest_name})"
-            payload = f'{{"ok": false, "reason": "NameNotFound", "src": "{src_name}", "dest": "{dest_name}"}}'
+            payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_name}
+            payload = json.dumps(payload_obj)
             resp = create_data_packet(seq_num=seq_num, name=route_name, payload=payload, flags=ACK_FLAG)
             self.sock.sendto(resp, addr)
             print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
             return
 
         next_hop = path[1] if len(path) >= 2 else dest_name
-        next_hop_port = self.name_to_port.get(next_hop)
+        next_hop_port = self.name_to_port.get(next_hop)  # may be None
 
         route_name = f"{self.ns_name}/Route({dest_name})"
-        payload = (
-            '{'
-            f'"ok": true, '
-            f'"src": "{src_name}", '
-            f'"dest": "{dest_name}", '
-            f'"path": {path}, '
-            f'"next_hop": "{next_hop}", '
-            f'"next_hop_port": {next_hop_port[1] if next_hop_port else "null"}'
-            '}'
-        )
+        payload_obj = {
+            "ok": True,
+            "src": src_name,
+            "dest": dest_name,
+            "path": path,
+            "next_hop": next_hop,
+            "next_hop_port": next_hop_port
+        }
+        payload = json.dumps(payload_obj)
         resp = create_data_packet(seq_num=seq_num, name=route_name, payload=payload, flags=ACK_FLAG)
         self.sock.sendto(resp, addr)
         print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}, port={next_hop_port}) to {addr}")
