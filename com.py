@@ -147,6 +147,10 @@ class DebugController:
         if node_name in self.nodes:
             self.selected_node = self.nodes[node_name]
             print(f"\n[DEBUG] Zoomed into node: {node_name} (port {self.selected_node.port})")
+            if hasattr(self.selected_node, "ns_name"):
+                nameserver_debug_menu(self.selected_node)
+            else:
+                node_debug_menu(self.selected_node)
         else:
             print(f"[DEBUG] Node {node_name} not found.")
 
@@ -165,8 +169,9 @@ class DebugController:
         print("""
 [DEBUG COMMANDS]
   list                 - show all nodes
-  select <node_name>   - zoom into a node (for later)
+  select <node_name>   - zoom into a node
   run <test_id>        - execute a predefined test (run 1 for now)
+  filter <names...>    - logs for listed nodes
   help                 - show this menu
   exit                 - quit debugging
         """)
@@ -211,6 +216,102 @@ def debug_input_loop(controller):
         if controller.process_command(cmd):
             break
 
+
+# node debug menu
+def node_debug_menu(node):
+    print(f"\nNode Name/s: {getattr(node, 'name', getattr(node, 'ns_name', 'Unknown'))}")
+    print(f"Port: {getattr(node, 'port', 'N/A')}")
+    print("[AVAILABLE COMMANDS]")
+    print("  view fib")
+    print("  view pit")
+    print("  view cs")
+    print("  view buffer")
+    print("  view neighbors")
+    print("  view logs")
+    print("  back\n")
+
+    while True:
+        cmd = input(f"{getattr(node, 'name', 'Node')}> ").strip().lower()
+        if cmd == "back":
+            print("\n[DEBUG] Returning to global menu...\n")
+            break
+
+        elif cmd == "view fib":
+            print(f"\n[FIB for {node.name}]")
+            print(node.fib if hasattr(node, "fib") else "No FIB table.\n")
+
+        elif cmd == "view pit":
+            print(f"\n[PIT for {node.name}]")
+            print(node.pit if hasattr(node, "pit") else "No PIT table.\n")
+
+        elif cmd == "view cs":
+            print(f"\n[CS for {node.name}]")
+            print(node.cs if hasattr(node, 'cs') else "No CS cache.\n")
+
+        elif cmd == "view buffer":
+            print(f"\n[BUFFER for {node.name}]")
+            if hasattr(node, "buffer"):
+                for entry in node.buffer:
+                    print(entry)
+            else:
+                print("No buffer.\n")
+
+        elif cmd == "view neighbors":
+            if hasattr(node, "get_neighbors"):
+                print(f"\n[Neighbors of {node.name}]")
+                print(node.get_neighbors())
+            else:
+                print("No neighbor table.\n")
+
+        elif cmd == "view logs":
+            if hasattr(node, "logs"):
+                print(f"\n[Logs for {node.name}]")
+                for log in node.logs:
+                    print(f"[{log['timestamp']}] {log['message']}")
+            else:
+                print("No logs found.\n")
+
+        else:
+            print("[DEBUG] Unknown command. Type one of: view fib/pit/cs/buffer/neighbors/logs/back")
+
+# nameserver debug menu
+def nameserver_debug_menu(ns):
+    print(f"\nNameServer: {getattr(ns, 'ns_name', 'Unknown')}")
+    print(f"Port: {getattr(ns, 'port', 'N/A')}")
+    print("[AVAILABLE COMMANDS]")
+    print("  view fib")
+    print("  view registry")
+    print("  view neighbors")
+    print("  back\n")
+
+    while True:
+        cmd = input(f"{getattr(ns, 'ns_name', 'NS')}> ").strip().lower()
+        if cmd == "back":
+            print("\n[DEBUG] Returning to global menu...\n")
+            break
+
+        elif cmd == "view fib":
+            print(f"\n[FIB for {ns.ns_name}]")
+            print(getattr(ns, "fib", "No FIB table.\n"))
+
+        elif cmd == "view registry":
+            reg = getattr(ns, "registry", getattr(ns, "registered_nodes", None))
+            if reg:
+                print(f"\n[Registry for {ns.ns_name}]")
+                for name, info in reg.items():
+                    print(f"  {name} → {info}")
+            else:
+                print("No registry or registered nodes.\n")
+
+        elif cmd == "view neighbors":
+            if hasattr(ns, "get_neigbors"):
+                print(f"\n[Neighbors of {ns.ns_name}]")
+                print(ns.get_neigbors())
+            else:
+                print("No neighbor table.\n")
+
+        else:
+            print("[DEBUG] Unknown command. Type one of: view fib/registry/neighbors/back")
 
 controller = DebugController(nodes)
 
