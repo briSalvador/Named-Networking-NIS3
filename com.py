@@ -154,23 +154,103 @@ class DebugController:
         else:
             print(f"[DEBUG] Node {node_name} not found.")
 
+
     def run_test(self, test_id):
         print(f"[DEBUG] Running test case {test_id}...")
-        # test
+
+        # intra-domain
         if test_id == "1":
             src = self.nodes.get("/DLSU/Andrew/PC1")
-            dest = self.nodes.get("/DLSU")
+            dest = self.nodes.get("/DLSU/Gokongwei")
             if src and dest:
-                src.send_interest(seq_num=1, name="sensor/data", target=("127.0.0.1", dest.port))
+                print("[TEST 1] Sending Interest within DLSU domain...")
+                # not sure yet
+                try:
+                    dest.add_cs("/DLSU/Gokongwei/hello.txt", "Hello from Gokongwei!")
+                except Exception:
+                    pass
+                src.send_interest(
+                    seq_num=1,
+                    name="/DLSU/Gokongwei/hello.txt",
+                    target=("127.0.0.1", dest.port),
+                )
+            else:
+                print("[TEST 1] Nodes not found in registry.")
+
+        # inter-domain
+        elif test_id == "2":
+            src = self.nodes.get("/DLSU/Andrew/PC1")
+            dest = self.nodes.get("/UP/Salcedo/PC1")
+            if src and dest:
+                print("[TEST 2] Sending Interest across domains (DLSU → UP)...")
+                try:
+                    dest.add_cs("/UP/Salcedo/PC1/status.txt", "UP Salcedo PC1 is alive")
+                except Exception:
+                    pass
+                src.send_interest(
+                    seq_num=10,
+                    name="/UP/Salcedo/PC1/status.txt",
+                    target=("127.0.0.1", dest.port),
+                )
+            else:
+                print("[TEST 2] Source or destination node not found.")
+
+        # nonexistent node (domain exists)
+        elif test_id == "3":
+            src = self.nodes.get("/DLSU/Andrew/PC1")
+            admu_ns = self.nodes.get("/ADMU/NameServer1")
+            if src and admu_ns:
+                print("[TEST 3] Sending Interest to nonexistent node in ADMU...")
+                src.send_interest(
+                    seq_num=20,
+                    name="/ADMU/nonexistent_node/hello.pdf",
+                    target=("127.0.0.1", admu_ns.port),
+                )
+            else:
+                print("[TEST 3] Source node or ADMU NameServer not found.")
+
+        # nonexistent domain
+        elif test_id == "4":
+            src = self.nodes.get("/DLSU/Andrew/PC1")
+            dlsu_ns = self.nodes.get("/DLSU/NameServer1")
+            if src and dlsu_ns:
+                print("[TEST 4] Sending Interest to nonexistent domain /XYZ...")
+                src.send_interest(
+                    seq_num=30,
+                    name="/XYZ/UnknownNode/data.txt",
+                    target=("127.0.0.1", dlsu_ns.port),
+                )
+            else:
+                print("[TEST 4] Source node or DLSU NameServer not found.")
+
+        # malformed packet
+        elif test_id == "5":
+            src = self.nodes.get("/DLSU/Andrew/PC1")
+            if src:
+                print("[TEST 5] Sending malformed packet...")
+                import struct
+                packet_type = 0x0
+                flags = 0x0
+                ptf = (packet_type << 4) | (flags & 0xF)
+                seq = 0xAA
+                name = b"bad"
+                name_len = len(name)
+                header = struct.pack("!BBB", ptf, seq, name_len)
+                payload = header + name + b"\x03" + b"zzz"
+                src.sock.sendto(payload, ("127.0.0.1", src.port))
+            else:
+                print("[TEST 5] Source node not found.")
+
         else:
-            print(f"[DEBUG] Test {test_id} not defined.")
+            print(f"[DEBUG] Test {test_id} not defined. Use 1-5.")
+
 
     def help(self):
         print("""
 [DEBUG COMMANDS]
   list                 - show all nodes
   select <node_name>   - zoom into a node
-  run <test_id>        - execute a predefined test (run 1 for now)
+  run <test_id>        - execute a test (1-5)
   filter <names...>    - logs for listed nodes
   help                 - show this menu
   exit                 - quit debugging
