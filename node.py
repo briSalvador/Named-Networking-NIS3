@@ -450,6 +450,8 @@ class Node:
         self.sock.sendto(pkt, target)
         print(f"[{self.name}] Sent INTEREST packet to {target}")
         self.log(f"[{self.name}] Sent INTEREST packet to {target}")
+        # --- FIX: buffer the outgoing interest ---
+        self.add_to_buffer(pkt, target, reason="Originated Interest")
         return pkt
 
     def send_data(self, seq_num, name, payload, flags=0x0, target=("127.0.0.1", 0)):
@@ -531,41 +533,67 @@ class Node:
 
             # existing PIT/CS handling
             if pkt_obj.name not in self.pit:
-                self.pit_interfaces.append(addr[1])
-                self.pit[pkt_obj.name] = list(self.pit_interfaces)
-                print(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
-                self.log(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {self.pit_interfaces}")
+                self.pit[pkt_obj.name] = [addr[1]]
+                print(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {[addr[1]]}")
+                self.log(f"[{self.name}] Added {pkt_obj.name} to PIT with interfaces: {[addr[1]]}")
             else:
-                if addr[1] not in self.pit_interfaces:
-                    self.pit_interfaces.append(addr[1])
-                    self.pit[pkt_obj.name] = list(self.pit_interfaces)
+                if addr[1] not in self.pit[pkt_obj.name]:
+                    self.pit[pkt_obj.name].append(addr[1])
                     print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
                     self.log(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
-            if table is None:
-                # Add to buffer and forward to domain NameServer if the name is within node's domain(s)
+            def get_node_name(name):
+                """Strip the last component if it's a file, return the node name."""
+                segments = name.strip('/').split('/')
+                if len(segments) > 1:
+                    # Remove last segment (file or leaf)
+                    return '/' + '/'.join(segments[:-1])
+                return name
+
+            # Check if destination is a direct neighbor
+            node_name = get_node_name(parsed["Name"])
+            neighbor_port = self.name_to_port.get(node_name)
+            if neighbor_port is not None:
+                print(f"[{self.name}] Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
+                self.log(f"[{self.name}] Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
+                pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"])
+                self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
+                return
+            
+            # --- Always check if we need to query the NameServer ---
+            if table is None or table is "PIT":
+                # Always add to buffer
                 self.add_to_buffer(packet, addr, reason="No FIB route available")
-                dest_domain = parsed["Name"].lstrip('/').split('/')[0] if parsed["Name"].startswith('/') else None
-                if dest_domain and dest_domain in self.domains:
-                    ns_name = f"/{dest_domain}/NameServer1"
-                    fib_entry = self.fib.get(ns_name)
-                    if fib_entry:
-                        ns_port = fib_entry["NextHops"]
-                        try:
-                            self.sock.sendto(create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed.get("OriginNode", self.name)), ("127.0.0.1", int(ns_port)))
-                            print(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
-                            self.log(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
-                            # mark buffered entries as forwarded to NS
-                            with self.buffer_lock:
-                                for entry in self.buffer:
-                                    if entry["destination"] == parsed["Name"]:
-                                        entry["forwarded_to_ns"] = True
-                        except Exception as e:
-                            print(f"[{self.name}] Error forwarding INTEREST to NS via FIB: {e}")
-                            self.log(f"[{self.name}] Error forwarding INTEREST to NS via FIB: {e}")
-                    else:
-                        print(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
-                        self.log(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
+                # Now check if we've already sent a query for this Interest to the NS
+                already_asked_ns = False
+                with self.buffer_lock:
+                    # Only check the most recent (last) buffer entry for this destination
+                    for entry in reversed(self.buffer):
+                        if entry["destination"] == parsed["Name"]:
+                            already_asked_ns = entry.get("forwarded_to_ns", False)
+                            break
+                if not already_asked_ns:
+                    dest_domain = parsed["Name"].lstrip('/').split('/')[0] if parsed["Name"].startswith('/') else None
+                    if dest_domain and dest_domain in self.domains:
+                        ns_name = f"/{dest_domain}/NameServer1"
+                        fib_entry = self.fib.get(ns_name)
+                        if fib_entry:
+                            ns_port = fib_entry["NextHops"]
+                            try:
+                                self.sock.sendto(create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=self.name), ("127.0.0.1", int(ns_port)))
+                                print(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
+                                self.log(f"[{self.name}] Forwarded INTEREST for {parsed['Name']} to domain NameServer {ns_name} via FIB at port {ns_port}")
+                                # mark buffered entries as forwarded to NS
+                                with self.buffer_lock:
+                                    for entry in self.buffer:
+                                        if entry["destination"] == parsed["Name"]:
+                                            entry["forwarded_to_ns"] = True
+                            except Exception as e:
+                                print(f"[{self.name}] Error forwarding INTEREST to NS via FIB: {e}")
+                                self.log(f"[{self.name}] Error forwarding INTEREST to NS via FIB: {e}")
+                        else:
+                            print(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
+                            self.log(f"[{self.name}] No FIB entry for domain NameServer {ns_name} (domain={dest_domain})")
                 return  # buffer unknown routes
 
             if table == "CS":
@@ -718,7 +746,7 @@ class Node:
                             self.add_fib(dest, nh, exp_time=5000, hop_count=1)
                             print(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
                             self.log(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
-                            # resolve buffered entries for this dest and forward immediately
+                            # --- FIX: Forward buffered INTEREST(s) for this dest to the next hop ---
                             with self.buffer_lock:
                                 to_remove = []
                                 for entry in list(self.buffer):
@@ -726,11 +754,28 @@ class Node:
                                         entry["status"] = "resolved"
                                         entry["next_hop"] = nh
                                         try:
-                                            self.sock.sendto(entry["packet"], ("127.0.0.1", nh))
-                                            print(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
-                                            self.log(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh}")
+                                            parsed_interest = parse_interest_packet(entry["packet"])
+                                            # --- Find the next hop router's name ---
+                                            next_hop_name = None
+                                            for n, p in self.name_to_port.items():
+                                                if p == nh:
+                                                    next_hop_name = n
+                                                    break
+                                            if not next_hop_name:
+                                                next_hop_name = str(nh)  # fallback: use port as string
+
+                                            new_interest_pkt = create_interest_packet(
+                                                parsed_interest["SequenceNumber"],
+                                                parsed_interest["Name"],
+                                                parsed_interest["Flags"],
+                                                origin_node=self.name  # Always set to the current router's name
+                                            )
+                                            self.sock.sendto(new_interest_pkt, ("127.0.0.1", nh))
+                                            print(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh} (origin_node updated to {next_hop_name})")
+                                            self.log(f"[{self.name}] Forwarded buffered INTEREST for {dest} to next hop {nh} (origin_node updated to {next_hop_name})")
                                         except Exception as e:
                                             print(f"[{self.name}] Error forwarding buffered INTEREST to {nh}: {e}")
+                                            self.log(f"[{self.name}] Error forwarding buffered INTEREST to {nh}: {e}")
                                         to_remove.append(entry)
                                 for entry in to_remove:
                                     if entry in self.buffer:
@@ -849,7 +894,11 @@ class Node:
             if name == key:
                 return "PIT", self.pit[key]
 
-        # 3. FIB: Match interest name with FIB entry except last level (data name)
+        # 3. FIB: FIRST try exact match on the full name
+        if name in self.fib:
+            return "FIB", self.fib[name]
+
+        # 4. FIB: Match interest name with FIB entry except last level (data name)
         def strip_last_level(path):
             if not path:
                 return path
