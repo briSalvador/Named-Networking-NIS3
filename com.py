@@ -45,12 +45,12 @@ if __name__ == "__main__":
     upc1 = Node("/UP/Salcedo/PC1", port=7004)
 
     nodes =[dpc1, andrew, goks, henry, dlsu, miguel, dcam1, dxa, 
-            gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns, admu_ns]
+            gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns, admu_ns, up_ns]
 
     # load all nodes
     for node in nodes:
         node.load_neighbors_from_file("neighbors.txt")
-    time.sleep(2)
+    time.sleep(5)
 
     # neighbor tables
     print("\n--- Neighbor Tables ---")
@@ -59,7 +59,6 @@ if __name__ == "__main__":
     print("henry neighbors:", henry.get_neighbors())
     print("border router neighbors: ", dxa.get_neighbors())
     print("NameServer neighbors:", ns.get_neigbors())
-
 
     # tests buffer and queueing (temp)
     NPU = 8
@@ -73,7 +72,7 @@ if __name__ == "__main__":
         processing_unit = i % NPU
         fake_name = f"/UP/UnknownTarget{processing_unit}"
         seq_num = 1000 + i
-        andrew.send_interest(seq_num, fake_name, target=("127.0.0.1", 5005))
+        andrew.send_interest(seq_num, fake_name, target=("127.0.0.1", 5003))
         print(f"[TEST] Packet {i} handled by NPU {processing_unit}")
 
     for i in range(TOTAL_PACKETS):
@@ -87,21 +86,22 @@ if __name__ == "__main__":
     print(f"\n[TEST] Sent {TOTAL_PACKETS} Interest packets distributed across {NPU} NPUs.")
     print("[TEST] Buffer growth and FIFO processing sequence below...\n")
 
-    time.sleep(4)
+    time.sleep(5)
 
     # Interest Testing (Levenshtein Distance)
-    dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5002))
-    dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from dcam!")
+    #dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5002))
+    #dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from dcam!")
     """ dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
     goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5004)) """
     #henry.send_interest(seq_num=0, name="/DLSU/Andrew", target=("127.0.0.1", 5006))
-    time.sleep(2)
+    time.sleep(5)
 
     # fib tables
     print("\n--- FIB Tables ---")
     print("henry FIB:", henry.fib)
+    print("andrew FIB:", andrew.fib)
     print("dpc1 FIB:", dpc1.fib)
     print("dlsu FIB:", dlsu.fib)
     print("border router FIB: ", dxa.fib)
@@ -110,6 +110,7 @@ if __name__ == "__main__":
     print("henry PIT:", henry.pit)
     print("miguel PIT: ", miguel.pit)
     print("dlsu PIT:", dlsu.pit)
+    print("goks PIT:", goks.pit)
 
 # DEBUGGING MENU 
 class DebugController:

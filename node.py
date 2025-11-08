@@ -139,49 +139,160 @@ def parse_hello_packet(packet):
         "Name": name
     }
 
-def create_update_packet(name, next_hop_port, number_of_hops):
+def create_update_packet(name, origin_name, next_hop_port, number_of_hops):
     packet_type = UPDATE
     flags = 0x0
     packet_type_flags = (packet_type << 4) | flags
+
     name_bytes = name.encode("utf-8")
     name_length = len(name_bytes)
-    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
-    update_info = f"{name} {next_hop_port} {number_of_hops}"
+
+    update_info = f"{name} {origin_name} {next_hop_port} {number_of_hops}"
     update_info_bytes = update_info.encode("utf-8")
     update_info_length = len(update_info_bytes)
+
+    # Build packet header
     header = struct.pack("!BBH", packet_type_flags, name_length, update_info_length)
     return header + name_bytes + update_info_bytes
 
-def create_ns_update_packet(name, next_hop_port, number_of_hops):
+def create_ns_update_packet(name, origin_name, next_hop_port, number_of_hops):
     packet_type = UPDATE
     flags = 0x1
     packet_type_flags = (packet_type << 4) | flags
     name_bytes = name.encode("utf-8")
     name_length = len(name_bytes)
-    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
-    update_info = f"{name} {next_hop_port} {number_of_hops}"
+    update_info = f"{name} {origin_name} {next_hop_port} {number_of_hops}"
     update_info_bytes = update_info.encode("utf-8")
     update_info_length = len(update_info_bytes)
     header = struct.pack("!BBH", packet_type_flags, name_length, update_info_length)
     return header + name_bytes + update_info_bytes
 
+def create_neighbor_update_packet(node_name, neighbor_name):
+    """
+    Creates an UPDATE packet (flag 0x2) for notifying a NameServer of neighbor relationships.
+    Supports nodes and neighbors with multiple names (space-separated).
+    
+    Format:
+      Header: !BBH (packet_type_flags, node_name_length, info_length)
+      Payload: "<node_name> <neighbor_name>"
+    
+    Example:
+      node_name="/DLSU/Router1 /ADMU/Router1"
+      neighbor_name="/DLSU/Andrew /DLSU/Gokongwei"
+    """
+    packet_type = UPDATE
+    flags = 0x2  # indicates neighbor update to NS
+    packet_type_flags = (packet_type << 4) | flags
+
+    # Normalize names (strip extra spaces)
+    node_name = " ".join(node_name.strip().split())
+    neighbor_name = " ".join(neighbor_name.strip().split())
+
+    # Encode node name
+    node_name_bytes = node_name.encode("utf-8")
+    node_name_length = len(node_name_bytes)
+
+    # Build payload (update info)
+    update_info = f"{node_name} | {neighbor_name}"
+    update_info_bytes = update_info.encode("utf-8")
+    update_info_length = len(update_info_bytes)
+
+    # Build header and packet
+    header = struct.pack("!BBH", packet_type_flags, node_name_length, update_info_length)
+    packet = header + node_name_bytes + update_info_bytes
+    return packet
+
+
+def parse_neighbor_update_packet(packet):
+    """
+    Parses a neighbor UPDATE packet created by create_neighbor_update_packet().
+    Returns a dict:
+      {
+        "PacketType": <int>,
+        "Flags": <int>,
+        "NodeNames": ["/DLSU/Router1", "/ADMU/Router1"],
+        "NeighborNames": ["/DLSU/Andrew", "/DLSU/Gokongwei"]
+      }
+    """
+    try:
+        packet_type_flags, node_name_length, info_length = struct.unpack("!BBH", packet[:4])
+
+        # Decode node name
+        node_start = 4
+        node_end = node_start + node_name_length
+        node_name = packet[node_start:node_end].decode("utf-8")
+
+        # Decode update info
+        info_start = node_end
+        info_end = info_start + info_length
+        update_info = packet[info_start:info_end].decode("utf-8")
+
+        # Expected format: "<node_name> | <neighbor_name>"
+        if "|" in update_info:
+            node_part, neighbor_part = update_info.split("|", 1)
+        else:
+            # fallback (old format without delimiter)
+            parts = update_info.split(maxsplit=1)
+            node_part = parts[0] if parts else ""
+            neighbor_part = parts[1] if len(parts) > 1 else ""
+
+        # Split by spaces for multi-name support
+        node_names = [n.strip() for n in node_part.strip().split() if n.strip()]
+        neighbor_names = [n.strip() for n in neighbor_part.strip().split() if n.strip()]
+
+        return {
+            "PacketType": (packet_type_flags >> 4) & 0xF,
+            "Flags": packet_type_flags & 0xF,
+            "Name": node_names,
+            "NeighborNames": neighbor_names
+        }
+
+    except Exception as e:
+        print(f"[parse_neighbor_update_packet] Error parsing packet: {e}")
+        return None
+
 def parse_update_packet(packet):
-    packet_type_flags, name_length, update_info_length = struct.unpack("!BBH", packet[:4])
-    name = packet[4:4+name_length].decode("utf-8")
-    update_info_start = 4 + name_length
-    update_info_end = update_info_start + update_info_length
-    update_info = packet[update_info_start:update_info_end].decode("utf-8")
-    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
-    parts = update_info.split()
-    next_hop = parts[1] if len(parts) > 1 else None
-    number_of_hops = int(parts[2]) if len(parts) > 2 else None
-    return {
-        "PacketType": (packet_type_flags >> 4) & 0xF,
-        "Flags": packet_type_flags & 0xF,
-        "Name": name,
-        "NextHop": next_hop,
-        "NumberOfHops": number_of_hops
-    }
+    try:
+        packet_type_flags, name_length, update_info_length = struct.unpack("!BBH", packet[:4])
+
+        # Decode main name
+        name_start = 4
+        name_end = 4 + name_length
+        name = packet[name_start:name_end].decode("utf-8")
+
+        # Decode update info
+        update_info_start = name_end
+        update_info_end = update_info_start + update_info_length
+        update_info = packet[update_info_start:update_info_end].decode("utf-8")
+
+        packet_type = (packet_type_flags >> 4) & 0xF
+        flags = packet_type_flags & 0xF
+
+        # If this is a neighbor update (0x2), parse using the dedicated function
+        if flags == 0x2:
+            return parse_neighbor_update_packet(packet)
+
+        # Split into components
+        parts = update_info.split()
+
+        # Format: <name> <origin_name> <next_hop_port> <number_of_hops>
+        dest_name = parts[0] if len(parts) > 0 else None
+        origin_name = parts[1] if len(parts) > 1 else None
+        next_hop = parts[2] if len(parts) > 2 else None
+        number_of_hops = int(parts[3]) if len(parts) > 3 else None
+
+        return {
+            "PacketType": (packet_type_flags >> 4) & 0xF,
+            "Flags": packet_type_flags & 0xF,
+            "Name": dest_name,
+            "OriginName": origin_name,
+            "NextHop": next_hop,
+            "NumberOfHops": number_of_hops
+        }
+
+    except Exception as e:
+        print(f"[parse_update_packet] Error parsing UPDATE packet: {e}")
+        return None
 
 def get_domains_from_name(node_name):
     """
@@ -386,13 +497,17 @@ class Node:
         return port
 
     def _listen(self):
-        """Continuously listen for incoming packets."""
+        """Continuously listen for incoming packets and enqueue them into the buffer before processing."""
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(4096)
                 self.receive_packet(data, addr)
+                # with self.buffer_lock:
+                    # Add raw packet to buffer first
+                    #self.buffer.append((data, addr))
+                print(f"[{self.name}] Received packet from {addr}, added to buffer (size={len(self.buffer)})")
             except Exception as e:
-                print(f"[{self.name}] Listener stopped: {e}")
+                print(f"[{self.name}] Listener error: {e}")
                 break
 
     # buffer and queueing
@@ -400,6 +515,7 @@ class Node:
         entry = {
             "packet": packet,
             "source": self.name,
+            "addr": addr,
             "destination": None,
             "status": "waiting",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
@@ -440,6 +556,9 @@ class Node:
                             else:
                                 print(f"[{self.name}] Buffered entry for {dest} resolved but no next_hop found; dropping.")
                                 self.log(f"[{self.name}] Buffered entry for {dest} resolved but no next_hop found; dropping.")
+                            self.buffer.popleft()
+                        else:
+                            self.receive_packet(entry["packet"], entry["addr"])
                             self.buffer.popleft()
             except Exception as e:
                 print(f"[{self.name}] Buffer processing error: {e}")
@@ -511,6 +630,54 @@ class Node:
             self.sock.sendto(pkt, target)
             print(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
             self.log(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
+
+    def handle_hello_from_neighbor(self, neighbor_name, addr, packet, timestamp):
+        try:
+            # Update neighbor tracking and mapping
+            self.neighbor_table[neighbor_name] = timestamp
+            self.name_to_port[neighbor_name] = addr[1]
+
+            print(f"[{self.name}] Received REGULAR HELLO from {neighbor_name} at {addr}")
+            self.log(f"[{self.name}] Received REGULAR HELLO from {neighbor_name} at {addr}")
+
+            # --- Identify all domains this node belongs to ---
+            domains = get_domains_from_name(self.name)
+            if not domains:
+                print(f"[{self.name}] No domains found for UPDATE to NS.")
+                self.log(f"[{self.name}] No domains found for UPDATE to NS.")
+                return
+
+            # --- Notify all NameServers in each domain this node belongs to ---
+            for domain in domains:
+                ns_name = f"/{domain}/NameServer1"
+                fib_entry = self.fib.get(ns_name)
+
+                if fib_entry:
+                    ns_port = fib_entry["NextHops"]
+                    try:
+                        # Create and send an update packet to inform NS of active neighbor
+                        update_pkt = create_neighbor_update_packet(neighbor_name, self.name)
+                        self.sock.sendto(update_pkt, ("127.0.0.1", int(ns_port)))
+
+                        msg = (f"[{self.name}] Sent topology UPDATE to {ns_name} "
+                            f"(port {ns_port}) about neighbor {neighbor_name}")
+                        print(msg)
+                        self.log(msg)
+
+                    except Exception as e:
+                        self.add_to_buffer(packet, addr, reason="Error sending UPDATE to NameServer")
+                        print(f"[{self.name}] Error sending UPDATE to NS {ns_name}: {e}")
+                        self.log(f"[{self.name}] Error sending UPDATE to NS {ns_name}: {e}")
+
+                else:
+                    # No valid FIB entry to NS — buffer packet for retry
+                    self.add_to_buffer(packet, addr, reason="No FIB route to NameServer")
+                    print(f"[{self.name}] No FIB entry for domain NameServer {ns_name}")
+                    self.log(f"[{self.name}] No FIB entry for domain NameServer {ns_name}")
+
+        except Exception as e:
+            print(f"[{self.name}] Error handling HELLO from {neighbor_name}: {e}")
+            self.log(f"[{self.name}] Error handling HELLO from {neighbor_name}: {e}")
 
     def receive_packet(self, packet, addr=None):
         packet_type = (packet[0] >> 4) & 0xF
@@ -647,13 +814,12 @@ class Node:
 
             if parsed["Flags"] == 0x0:
                 sender_domains = get_domains_from_name(neighbor_name)
-                ns_update_packet = create_ns_update_packet(neighbor_name, addr[1], 1)
+                ns_update_packet = create_ns_update_packet(neighbor_name, self.name, addr[1], 1)
                 self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
                                                         ns_update_packet, exclude_port=addr[1])
-            else:
-                update_pkt = create_update_packet(self.name, self.port, 1)
-                self.sock.sendto(update_pkt, addr)
-                #print(f"[{self.name}] Sent UPDATE back to {neighbor_name} at {addr}")
+                self.handle_hello_from_neighbor(neighbor_name, addr, packet, timestamp)
+            elif parsed["Flags"] == 0x1:
+                self.handle_hello_from_neighbor(neighbor_name, addr, packet, timestamp)
 
             # Add neighbor to FIB
             self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
@@ -661,6 +827,8 @@ class Node:
         elif packet_type == UPDATE:
             parsed = parse_update_packet(packet)
             neighbor_name = parsed["Name"]
+            self.log(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr} with parsed data: {parsed}")
+            #print(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr} with parsed data: {parsed}")
             if parsed["Flags"] == 0x1:
                 now = time.time()
                 cooldown = 10  # seconds
@@ -672,16 +840,68 @@ class Node:
                 self.last_update_received[neighbor_name] = now
                 sender_domains = get_domains_from_name(neighbor_name)
                 hops = parsed["NumberOfHops"] + 1 if parsed["NumberOfHops"] else 1
-                ns_update_packet = create_ns_update_packet(neighbor_name, self.port, hops)
+                ns_update_packet = create_ns_update_packet(neighbor_name, self.name, self.port, hops)
                 self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
                                                         ns_update_packet, exclude_port=addr[1])
                 self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=hops)
                 self.name_to_port[neighbor_name] = addr[1]
-            else:
-                # Normal UPDATE, no cooldown
-                self.neighbor_table[neighbor_name] = timestamp
-                self.name_to_port[neighbor_name] = addr[1]
-                self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
+            elif parsed["Flags"] == 0x2:
+                # --- Handle NEIGHBOR UPDATE packets (forward to NameServer(s)) ---
+                parsed = parse_neighbor_update_packet(packet)
+                if not parsed:
+                    print(f"[{self.name}] Failed to parse NEIGHBOR UPDATE packet from {addr}")
+                    return
+
+                node_names = parsed.get("Name", [])
+                neighbor_names = parsed.get("NeighborNames", [])
+
+                if not node_names or not neighbor_names:
+                    print(f"[{self.name}] Invalid NEIGHBOR UPDATE: missing node or neighbor names from {addr}")
+                    return
+
+                print(f"[{self.name}] Received NEIGHBOR UPDATE packet at {addr}")
+                print(f"    [{self.name}] Node(s): {node_names}")
+                print(f"    [{self.name}] Neighbor(s): {neighbor_names}")
+                self.log(f"[{self.name}] Received NEIGHBOR UPDATE for {node_names} -> {neighbor_names} at {addr}")
+
+                # Determine this node's domains (for multi-domain/border routers)
+                domains = get_domains_from_name(self.name)
+                if not domains:
+                    print(f"[{self.name}] No domain(s) found for forwarding neighbor update to NS.")
+                    self.log(f"[{self.name}] No domain(s) found for forwarding neighbor update to NS.")
+                    return
+
+                # Forward updates to all relevant NameServers in this node's domains
+                for domain in domains:
+                    ns_name = f"/{domain}/NameServer1"
+                    fib_entry = self.fib.get(ns_name)
+                    if not fib_entry:
+                        self.add_to_buffer(packet, addr, reason=f"No FIB route to NameServer {ns_name}")
+                        print(f"[{self.name}] No FIB entry for NameServer {ns_name} — buffering NEIGHBOR UPDATE.")
+                        self.log(f"[{self.name}] No FIB entry for NameServer {ns_name} — buffering NEIGHBOR UPDATE.")
+                        continue
+
+                    ns_port = fib_entry["NextHops"]
+
+                    try:
+                        # Build combined multi-name packet for all node–neighbor pairs
+                        combined_node_name = " ".join(node_names)
+                        combined_neighbor_name = " ".join(neighbor_names)
+                        forward_pkt = create_neighbor_update_packet(combined_node_name, combined_neighbor_name)
+
+                        # Send packet to this domain's NameServer
+                        self.sock.sendto(forward_pkt, ("127.0.0.1", int(ns_port)))
+
+                        print(f"[{self.name}] Forwarded NEIGHBOR UPDATE to {ns_name} (port {ns_port}) "
+                            f"for nodes: {combined_node_name} -> {combined_neighbor_name}")
+                        self.log(f"[{self.name}] Forwarded NEIGHBOR UPDATE to {ns_name} (port {ns_port}) "
+                                f"for nodes: {combined_node_name} -> {combined_neighbor_name}")
+
+                    except Exception as e:
+                        # If sending fails, add packet to buffer
+                        self.add_to_buffer(packet, addr, reason=f"Failed to forward NEIGHBOR UPDATE to NS {ns_name}")
+                        print(f"[{self.name}] Error forwarding NEIGHBOR UPDATE to {ns_name}: {e}")
+                        self.log(f"[{self.name}] Error forwarding NEIGHBOR UPDATE to {ns_name}: {e}")
 
         elif packet_type == ROUTING_DATA:
             parsed = parse_route_data_packet(packet)
