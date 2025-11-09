@@ -805,9 +805,10 @@ class Node:
                         self.log(f"[{self.name}] Recorded NS query origin iface {addr[1]} for {parsed['Name']}")
                 except Exception:
                     pass
-                dest_domain = parsed["Name"].lstrip('/').split('/')[0] if parsed["Name"].startswith('/') else None
-                if dest_domain:
-                    ns_name = f"/{dest_domain}/NameServer1"
+                # Always send to own domain's NameServer, regardless of interest's domain
+                own_domain = self.domains[0] if self.domains else None
+                if own_domain:
+                    ns_name = f"/{own_domain}/NameServer1"
                     fib_entry = self.fib.get(ns_name)
                     if fib_entry:
                         ns_port = fib_entry["NextHops"]
@@ -840,9 +841,10 @@ class Node:
                             already_asked_ns = entry.get("forwarded_to_ns", False)
                             break
                 if not already_asked_ns:
-                    dest_domain = parsed["Name"].lstrip('/').split('/')[0] if parsed["Name"].startswith('/') else None
-                    if dest_domain:
-                        ns_name = f"/{dest_domain}/NameServer1"
+                    # Always send to own domain's NameServer, regardless of interest's domain
+                    own_domain = self.domains[0] if self.domains else None
+                    if own_domain:
+                        ns_name = f"/{own_domain}/NameServer1"
                         # try FIB entry for that domain's NameServer, or direct mapping if known
                         fib_entry = self.fib.get(ns_name)
                         ns_port = None
@@ -888,6 +890,7 @@ class Node:
                 self.log(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
                 self.forward_interest(pkt_obj, ("127.0.0.1", int(next_hop)))
             return pkt_obj
+
 
         elif packet_type == DATA:
             parsed = parse_data_packet(packet)
