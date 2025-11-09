@@ -22,9 +22,9 @@ TRUNC_FLAG = 0x3
 # When data is sent back by a node, the node will add it into its CS and FIB (not sure if this was done yet)
 
 if __name__ == "__main__":
-    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="topology.txt")
-    admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt")
-    up_ns = NameServer(ns_name="/UP/NameServer1", host="127.0.0.1", port=7000, topo_file="topology.txt")
+    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
+    admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="ADMU_NameServer1_topology.txt")
+    up_ns = NameServer(ns_name="/UP/NameServer1", host="127.0.0.1", port=7000, topo_file="UP_NameServer1_topology.txt")
     
     dpc1 = Node("/DLSU/Andrew/PC1", port=5001)
     andrew = Node("/DLSU/Andrew", port=5002)
@@ -49,7 +49,11 @@ if __name__ == "__main__":
 
     # load all nodes
     for node in nodes:
-        node.load_neighbors_from_file("neighbors.txt")
+        # NameServers and Nodes both implement load_neighbors_from_file
+        try:
+            node.load_neighbors_from_file("neighbors.txt")
+        except Exception:
+            pass
     time.sleep(2)
 
     # neighbor tables
@@ -90,10 +94,10 @@ if __name__ == "__main__":
     time.sleep(4)
 
     # Interest Testing (Levenshtein Distance)
-    # dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
-    # dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from dcam!")
-    dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
-    acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
+    dpc1.send_interest(seq_num=0, name="/DLSU/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
+    # dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    # acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
     """ dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
