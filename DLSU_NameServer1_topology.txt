@@ -1,0 +1,9 @@
+/DLSU/NameServer1: /DLSU/Henry, /DLSU/Miguel
+/DLSU/Andrew/PC1: /DLSU/Andrew
+/DLSU/Andrew: /DLSU/Gokongwei, /DLSU/Router1 /ADMU/Router1, /DLSU/Andrew/PC1
+/DLSU/Gokongwei: /DLSU/Andrew, /DLSU, /DLSU/Henry
+/DLSU/Henry: /DLSU/NameServer1, /DLSU/Gokongwei, /DLSU, /DLSU/Miguel
+/DLSU: /DLSU/Gokongwei, /DLSU/Henry, /DLSU/Miguel, /DLSU/Router1 /ADMU/Router1
+/DLSU/Miguel: /DLSU/NameServer1, /DLSU, /DLSU/Henry, /DLSU/Miguel/cam1
+/DLSU/Miguel/cam1: /DLSU/Miguel
+/DLSU/Router1 /ADMU/Router1: /DLSU/Andrew, /DLSU/Gokongwei, /DLSU

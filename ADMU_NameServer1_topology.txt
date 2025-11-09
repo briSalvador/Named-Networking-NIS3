@@ -1,0 +1,7 @@
+/DLSU/Router1 /ADMU/Router1: /ADMU/Gonzaga, /ADMU
+/ADMU/NameServer1: /ADMU
+/ADMU/Gonzaga: /DLSU/Router1 /ADMU/Router1, /ADMU, /ADMU/Gonzaga/cam1
+/ADMU: /ADMU/NameServer1, /DLSU/Router1 /ADMU/Router1, /ADMU/Gonzaga, /ADMU/Kostka, /ADMU/Router2 /UP/Router1
+/ADMU/Gonzaga/cam1: /ADMU/Gonzaga
+/ADMU/Kostka: /ADMU, /ADMU/Router2 /UP/Router1
+/ADMU/Router2 /UP/Router1: /ADMU, /ADMU/Kostka
