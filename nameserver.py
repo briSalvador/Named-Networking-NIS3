@@ -32,6 +32,23 @@ def create_data_packet(seq_num, name, payload, flags=0x0):
     header = struct.pack("!BBBB", packet_type_flags, seq_num, payload_size, name_length)
     return header + name_bytes + payload_bytes
 
+def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False):
+    """
+    Build an INTEREST packet (same encoding as Node.create_interest_packet).
+    Used by NameServer to create encapsulated queries.
+    """
+    packet_type = INTEREST
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+    seq_num = seq_num & 0xFF
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes) & 0xFF
+    origin_bytes = origin_node.encode("utf-8")
+    origin_length = len(origin_bytes) & 0xFF
+    data_flag_byte = b'\x01' if data_flag else b'\x00'
+    header = struct.pack("!BBB", packet_type_flags, seq_num, name_length)
+    pkt = header + name_bytes + struct.pack("!B", origin_length) + origin_bytes + data_flag_byte
+    return pkt
+
 def create_route_data_packet(seq_num, name, payload, flags=0x0):
     packet_type = ROUTING_DATA
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
@@ -263,7 +280,7 @@ class NameServer:
         - Source is determined from addr (using HELLO/UPDATE).
         - Name is the destination name.
         - Computes shortest path on graph from topology.txt.
-        - Replies with data
+        - Replies with ROUTING_DATA or forwards INTEREST to border router if dest is outside domain.
         """
         parsed = parse_interest_packet(packet)
         dest_name = parsed["Name"]
@@ -279,18 +296,115 @@ class NameServer:
         print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name}")
 
         original_name = dest_name
-        dest_name = self.strip_last_level(dest_name)
-        path = self._shortest_path(src_name, dest_name)
+        # destination for routing calculation is the parent entity (strip file/last level)
+        dest_node = self.strip_last_level(dest_name)
+
+        # helper: extract top-level domain from a name like "/ADMU/Gonzaga/..."
+        def _top_domain(name):
+            if not name:
+                return None
+            s = name.lstrip("/")
+            parts = s.split("/")
+            return parts[0] if parts else None
+
+        my_top = _top_domain(self.ns_name)
+        target_top = _top_domain(dest_node)
+
+        # If the request is for a name outside this NS domain, attempt to forward to a border router
+        if target_top and my_top and target_top != my_top:
+            # find candidate border routers (nodes whose any alias has the target top domain)
+            border_candidates = []
+            for node in self.graph.keys():
+                # node may contain space-separated aliases
+                for alias in node.split():
+                    if _top_domain(alias) == target_top:
+                        border_candidates.append(node)
+                        break
+
+            # Try candidates, find a path and a reachable port along that path (including aliases)
+            def _find_port_for_path(path_nodes):
+                # Check each hop in the path (after source) for any known port
+                # prefer hop nearest to source (path_nodes[1], path_nodes[2], ...)
+                for hop in path_nodes[1:]:
+                    # try exact mapping for hop (may be a multi-alias string)
+                    if hop in self.name_to_port:
+                        return self.name_to_port[hop], hop
+                    # try aliases
+                    for alias in hop.split():
+                        if alias in self.name_to_port:
+                            return self.name_to_port[alias], alias
+                return None, None
+
+            forwarded_any = False
+            for candidate in border_candidates:
+                # 1) Try path from THIS NS to the candidate (so NS can send to a neighbor it knows)
+                path_from_ns = self._shortest_path(self.ns_name, candidate)
+                if path_from_ns and len(path_from_ns) > 1:
+                    port, resolved_name = _find_port_for_path(path_from_ns)
+                    if port:
+                        try:
+                            # Encapsulate the original destination with the candidate (border) alias.
+                            # Format: "ENCAP:<candidate>|<original_name>"
+                            enc_name = f"ENCAP:{candidate}|{original_name}"
+                            enc_pkt = create_interest_packet(seq_num=seq_num, name=enc_name, flags=parsed.get("Flags",0), origin_node=src_name, data_flag=False)
+                            self.sock.sendto(enc_pkt, (self.host, int(port)))
+                            print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]")
+                            return
+                        except Exception as e:
+                            print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
+
+                # 2) Fallback: try path from the original source to the candidate and search ANY hop the NS knows
+                path_to_border = self._shortest_path(src_name, candidate)
+                if path_to_border:
+                    # search entire path (not only hops after src) for any known node/alias
+                    port, resolved_name = None, None
+                    for hop in path_to_border:
+                        if hop in self.name_to_port:
+                            port, resolved_name = self.name_to_port[hop], hop
+                            break
+                        for alias in hop.split():
+                            if alias in self.name_to_port:
+                                port, resolved_name = self.name_to_port[alias], alias
+                                break
+                        if port:
+                            break
+                    if port:
+                        try:
+                            enc_name = f"ENCAP:{candidate}|{original_name}"
+                            enc_pkt = create_interest_packet(seq_num=seq_num, name=enc_name, flags=parsed.get("Flags",0), origin_node=src_name, data_flag=False)
+                            self.sock.sendto(enc_pkt, (self.host, int(port)))
+                            print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]")
+                            return
+                        except Exception as e:
+                            print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
+
+                # 3) As fallback, check candidate aliases themselves (direct mapping)
+                for alias in candidate.split():
+                    if alias in self.name_to_port:
+                        try:
+                            enc_name = f"ENCAP:{candidate}|{original_name}"
+                            enc_pkt = create_interest_packet(seq_num=seq_num, name=enc_name, flags=parsed.get("Flags",0), origin_node=src_name, data_flag=False)
+                            self.sock.sendto(enc_pkt, (self.host, int(self.name_to_port[alias])))
+                            print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]")
+                            return
+                        except Exception as e:
+                            print(f"[NS {self.ns_name}] Error forwarding INTEREST to alias {alias} - {e}")
+
+            # If we couldn't forward to any border router because there were no known ports on path/candidates
+            print(f"[NS {self.ns_name}] Target domain {target_top} not local and no reachable border port found — continuing resolution attempt.")
+
+        # Normal handling: compute path to destination inside this domain
+        path = self._shortest_path(src_name, dest_node)
         if not path:
-            route_name = dest_name
-            payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_name}
+            route_name = dest_node
+            payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_node}
             payload = json.dumps(payload_obj)
             resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=payload, flags=ACK_FLAG)
             self.sock.sendto(resp, addr)
             print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
             return
 
-        next_hop = path[1] if len(path) >= 2 else dest_name
+        next_hop = path[1] if len(path) >= 2 else dest_node
         origin_name = parsed["OriginNode"]
         route_payload = {
             "origin_name": origin_name,
@@ -302,7 +416,7 @@ class NameServer:
 
         self.sock.sendto(resp, addr)
         print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
-
+        
     def _shortest_path(self, src, dest):
         if src not in self.graph or dest not in self.graph:
             return None
