@@ -331,6 +331,10 @@ class Node:
         self.logs.append({"timestamp": timestamp, "message": message})
 
     def load_neighbors_from_file(self, filename):
+        """
+        Read neighbors.txt and for the entry matching this node's name,
+        send HELLO packets to the listed ports so neighbors (including NS) learn our port.
+        """
         try:
             with open(filename, 'r') as f:
                 for line in f:
@@ -339,17 +343,19 @@ class Node:
                         continue
                     node_name, ports_str = line.split(':', 1)
                     node_name = node_name.strip()
-                    if node_name == self.name:
-                        ports = [p.strip() for p in ports_str.split(',') if p.strip()]
-                        for port in ports:
-                            #self.add_neighbor(self.host, int(port))
-                            try:
-                                pkt = create_hello_packet(self.name)
-                                self.sock.sendto(pkt, (self.host, int(port)))
-                                print(f"[{self.name}] Sent HELLO packet to {self.host}:{port}")
-                            except Exception as e:
-                                print(f"[{self.name}] Error sending HELLO packet to {self.host}:{port}: {e}")
-                        print(f"[{self.name}] Loaded neighbors from {filename}: {ports}")
+                    # match exact node name (including multi-alias names)
+                    if node_name != self.name:
+                        continue
+                    ports = [p.strip() for p in ports_str.split(',') if p.strip()]
+                    for port in ports:
+                        try:
+                            pkt = create_hello_packet(self.name)
+                            self.sock.sendto(pkt, (self.host, int(port)))
+                            print(f"[{self.name}] Sent HELLO to {self.host}:{port}")
+                            self.log(f"Sent HELLO to {self.host}:{port}")
+                        except Exception as e:
+                            print(f"[{self.name}] Error sending HELLO to {self.host}:{port}: {e}")
+                            self.log(f"Error sending HELLO to {self.host}:{port}: {e}")
         except Exception as e:
             print(f"[{self.name}] Error loading neighbors from {filename}: {e}")
             self.log(f"[{self.name}] Error loading neighbors from {filename}: {e}")
@@ -436,6 +442,46 @@ class Node:
                 pass
 
         self.log(f"[{self.name}] Received ROUTE DATA from {addr} payload={payload}")
+
+        # Ensure path is normalized to a list of node-names
+        path_field = parsed.get("Path", [])
+        if isinstance(path_field, str):
+            path = [p.strip() for p in path_field.split(",") if p.strip()]
+        elif isinstance(path_field, list):
+            path = path_field
+        else:
+            path = []
+
+        # If this node appears in the returned path, install a FIB entry pointing
+        # to the next hop in that path (toward the destination). This prevents
+        # installing FIBs that point back to the sender port and avoids ping-pong.
+        try:
+            if path and self.name in path:
+                idx = path.index(self.name)
+                if idx < len(path) - 1:
+                    next_node_name = path[idx + 1]
+                    # Resolve port for next_node_name
+                    next_port = None
+                    if next_node_name in self.name_to_port:
+                        try:
+                            next_port = int(self.name_to_port[next_node_name])
+                        except Exception:
+                            next_port = None
+                    if next_port is None:
+                        fib_entry = self.fib.get(next_node_name)
+                        if fib_entry:
+                            try:
+                                next_port = int(fib_entry["NextHops"])
+                            except Exception:
+                                next_port = None
+                    if next_port:
+                        remaining_hops = len(path) - idx - 1
+                        # IMPORTANT: mark this FIB as coming from the NameServer so it
+                        # can be used for parent/fuzzy matching by other nodes.
+                        self.add_fib(dest_name, next_port, exp_time=5000, hop_count=remaining_hops, source="NS")
+                        self.log(f"[{self.name}] Installed FIB for {dest_name} -> next hop {next_node_name} (port {next_port}), remaining_hops={remaining_hops}")
+        except Exception as e:
+            self.log(f"[{self.name}] Error installing FIB from ROUTE path: {e}")
 
         # If this ROUTING_DATA is for this node (we were the origin of the original NS query)
         if origin_name == self.name:
@@ -697,20 +743,18 @@ class Node:
             self.log(f"[{self.name}] Sent DATA packet to {target}")
         return True
     
-    def add_fib(self, name, interface, exp_time, hop_count):
+    def add_fib(self, name, interface, exp_time, hop_count, source="HELLO"):
         # interface is the next hop port (int)
+        entry = {
+            "NextHops": interface,
+            "ExpirationTime": exp_time,
+            "HopCount": hop_count,
+            "Source": source
+        }
         if name not in self.fib:
-            self.fib[name] = {
-                "NextHops": interface,
-                "ExpirationTime": exp_time,
-                "HopCount": hop_count
-            }
+            self.fib[name] = entry
         elif name in self.fib and hop_count < self.fib[name]["HopCount"]:
-            self.fib[name] = {
-                "NextHops": interface,
-                "ExpirationTime": exp_time,
-                "HopCount": hop_count
-            }
+            self.fib[name] = entry
 
         self.log(f"[{self.name}] FIB updated: {self.fib}")
 
@@ -727,12 +771,22 @@ class Node:
                 return
             # NextHops stored as single interface (int)
             port = next_hops
-            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags, origin_node=getattr(pkt_obj, 'origin_node', self.name))
+            # This is forwarding a REAL interest (to content) — ensure data_flag=True
+            pkt = create_interest_packet(pkt_obj.seq_num,
+                                         pkt_obj.name,
+                                         pkt_obj.flags,
+                                         origin_node=getattr(pkt_obj, 'origin_node', self.name),
+                                         data_flag=True)
             self.sock.sendto(pkt, ("127.0.0.1", int(port)))
             print(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
             self.log(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
         else:
-            pkt = create_interest_packet(pkt_obj.seq_num, pkt_obj.name, pkt_obj.flags, origin_node=getattr(pkt_obj, 'origin_node', self.name))
+            # When explicitly forwarding to target, assume this is toward content => data_flag=True
+            pkt = create_interest_packet(pkt_obj.seq_num,
+                                         pkt_obj.name,
+                                         pkt_obj.flags,
+                                         origin_node=getattr(pkt_obj, 'origin_node', self.name),
+                                         data_flag=True)
             self.sock.sendto(pkt, target)
             print(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
             self.log(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
@@ -745,6 +799,94 @@ class Node:
             parsed = parse_interest_packet(packet)
             is_real_interest = parsed["DataFlag"]
             origin_node = parsed["OriginNode"]
+
+            # --- Encapsulation handling: INTERESTs created by NameServer use the form:
+            # "ENCAP:<border_alias>|<original_name>"
+            # Nodes must not send encapsulated queries to their own NameServer; instead
+            # forward encapsulated packet toward the border alias. When the border node
+            # itself receives the ENCAP packet it strips it and continues normal processing.
+            enc_name = None
+            enc_border = None
+            if isinstance(parsed.get("Name"), str) and parsed["Name"].startswith("ENCAP:"):
+                try:
+                    rest = parsed["Name"][6:]
+                    enc_border, enc_name = rest.split("|", 1)
+                    enc_border = enc_border.strip()
+                    enc_name = enc_name.strip()
+                except Exception:
+                    enc_border = None
+                    enc_name = None
+
+            if enc_border:
+                # If this node is the border (one of its aliases), strip encapsulation and
+                # treat the Interest as if its Name is the original target.
+                if enc_border in self.name.split():
+                    parsed["Name"] = enc_name
+                    packet = create_interest_packet(parsed["SequenceNumber"], enc_name, parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=False)
+                    is_real_interest = False
+                   # continue processing below
+                else:
+                    # Try to forward directly if we already know the border port (HELLO/FIB)
+                    target_port = None
+                    if enc_border in self.name_to_port:
+                        target_port = int(self.name_to_port[enc_border])
+                    else:
+                        fib_entry = self.fib.get(enc_border)
+                        if fib_entry:
+                            try:
+                                target_port = int(fib_entry["NextHops"])
+                            except Exception:
+                                target_port = None
+                    if target_port:
+                        try:
+                            self.sock.sendto(packet, ("127.0.0.1", target_port))
+                            self.log(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
+                            print(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
+                            return
+                        except Exception as e:
+                            self.log(f"[{self.name}] Error forwarding ENCAP to {enc_border}:{target_port} - {e}")
+
+                    # No direct route: ask our NameServer for the border alias, and buffer the ENCAP packet.
+                    # Determine local domain NameServer
+                    own_domain = self.domains[0] if self.domains else None
+                    if own_domain:
+                        ns_name = f"/{own_domain}/NameServer1"
+                        ns_port = None
+                        fib_entry = self.fib.get(ns_name)
+                        if fib_entry:
+                            ns_port = fib_entry["NextHops"]
+                        else:
+                            ns_port = self.name_to_port.get(ns_name)
+
+                        # Buffer the encapsulated packet so it can be forwarded when route known
+                        self.add_to_buffer(packet, addr, reason=f"No route to border {enc_border} for ENCAP query (will ask NS)")
+
+                        if ns_port:
+                            # Send a separate query to local NameServer asking for the border alias
+                            try:
+                                # Query name = enc_border (we want NS to resolve that node)
+                                query_pkt = create_interest_packet(parsed["SequenceNumber"], enc_border, parsed["Flags"], origin_node=self.name, data_flag=False)
+                                self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
+                                self.log(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                                print(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                                # mark buffered entries as having been forwarded to NS so we don't duplicate
+                                with self.buffer_lock:
+                                    if self.buffer:
+                                        # mark newest matching buffer entries
+                                        for entry in reversed(self.buffer):
+                                            if entry.get("destination") == parsed.get("Name") or entry.get("destination") == enc_name:
+                                                entry["forwarded_to_ns"] = True
+                                                break
+                            except Exception as e:
+                                self.log(f"[{self.name}] Error sending NS query for border {enc_border} to {ns_name}:{ns_port} - {e}")
+                                # leave packet buffered and return
+                        return
+                    # No NS info: buffer and wait (as fallback)
+                    self.add_to_buffer(packet, addr, reason=f"No NS to query for border {enc_border} for ENCAP query")
+                    return
+            # --- end encapsulation handling
+
+
             pkt_obj = InterestPacket(
                 seq_num=parsed["SequenceNumber"],
                 name=parsed["Name"],
@@ -773,22 +915,57 @@ class Node:
                         self.log(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
             def get_node_name(name):
-                """Strip the last component if it's a file, return the node name."""
-                segments = name.strip('/').split('/')
-                if len(segments) > 1:
-                    # Remove last segment (file or leaf)
-                    return '/' + '/'.join(segments[:-1])
-                return name
+                # Return the parent node for a given full name.
+                # Examples:
+                #   "/DLSU/hello.txt" -> "/DLSU"
+                #   "/DLSU/Miguel/cam1/hello.txt" -> "/DLSU/Miguel/cam1"
+                if not name:
+                    return name
+                s = name.strip('/')
+                parts = s.split('/')
+                if len(parts) == 0:
+                    return name
+                if len(parts) == 1:
+                    return '/' + parts[0]
+                return '/' + '/'.join(parts[:-1])
+            
+            def _has_asked_ns(dest_name):
+                # Return True if this node has already sent an NS query for dest_name
+                try:
+                    with self.buffer_lock:
+                        for entry in self.buffer:
+                            if entry.get("destination") == dest_name and entry.get("forwarded_to_ns"):
+                                return True
+                except Exception:
+                    pass
+                return False
 
             # Check if destination is a direct neighbor
             node_name = get_node_name(parsed["Name"])
             neighbor_port = self.name_to_port.get(node_name)
+            # Allow direct neighbor forwarding only when:
+            #  - this node is the originator (it created the query),
+            #  OR
+            #  - this is a REAL_INTEREST and this node either already asked its NameServer
+            #    for this destination (so it attempted local resolution) OR it already has
+            #    a FIB entry for the destination.
+            allow_direct = False
             if neighbor_port is not None:
-                print(f"[{self.name}] Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
-                self.log(f"[{self.name}] Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
-                pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=is_real_interest)
+                if origin_node == self.name:
+                    allow_direct = True
+                elif is_real_interest:
+                    # permit only if we've previously queried NS for this dest or we already have a FIB
+                    if parsed["Name"] in self.fib or _has_asked_ns(parsed["Name"]):
+                        allow_direct = True
+
+            if neighbor_port is not None and allow_direct:
+                role = "originator" if origin_node == self.name else "in-transit(resolved)"
+                print(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
+                self.log(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
+                pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
                 self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
                 return
+            # Otherwise do not forward directly here; let the normal NS-query path handle it.
 
             # If this is a query to the NameServer (data_flag == False)
             if not is_real_interest:
@@ -805,7 +982,7 @@ class Node:
                         self.log(f"[{self.name}] Recorded NS query origin iface {addr[1]} for {parsed['Name']}")
                 except Exception:
                     pass
-                # Always send to own domain's NameServer, regardless of interest's domain
+
                 own_domain = self.domains[0] if self.domains else None
                 if own_domain:
                     ns_name = f"/{own_domain}/NameServer1"
@@ -821,7 +998,67 @@ class Node:
                             print(f"[{self.name}] Error forwarding NS query to {ns_name}: {e}")
                             self.log(f"[{self.name}] Error forwarding NS query to {ns_name}: {e}")
                         return
+                    
+                def _top_domain(fullname):
+                    if not fullname:
+                        return None
+                    segs = fullname.strip('/').split('/')
+                    return segs[0] if segs and segs[0] else None
+
+                origin_domain = _top_domain(origin_node)
+                target_domain = _top_domain(parsed["Name"])
+
+                # If this node is a border router (it contains multiple space-separated names),
+                # and origin/target domains differ, forward the query to the NameServer of the
+                # target domain.
+                if " " in self.name and origin_domain and target_domain and origin_domain != target_domain:
+                    ns_name = f"/{target_domain}/NameServer1"
+                    pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=False)
+
+                    # Preferred: direct send if we already know the NameServer port
+                    ns_port = self.name_to_port.get(ns_name)
+                    if ns_port:
+                        try:
+                            self.sock.sendto(pkt, ("127.0.0.1", ns_port))
+                            self.log(f"[{self.name}] FORWARDED QUERY -> {ns_name} (port {ns_port}) for {parsed['Name']} from {origin_node}")
+                            print(f"[{self.name}] Forwarded QUERY for {parsed['Name']} to {ns_name} at port {ns_port}")
+                            return
+                        except Exception as e:
+                            self.log(f"[{self.name}] Forward-to-NS failed: {e}")
+
+                    # Fallback: forward to any neighbor that belongs to the target domain (using neighbor names)
+                    forwarded = False
+                    for neighbor_name in list(self.neighbor_table.keys()):
+                        neighbor_domains = get_domains_from_name(neighbor_name)
+                        if target_domain in neighbor_domains:
+                            neighbor_port = self.name_to_port.get(neighbor_name)
+                            if neighbor_port:
+                                try:
+                                    self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
+                                    self.log(f"[{self.name}] FORWARDED QUERY -> neighbor {neighbor_name} (port {neighbor_port}) for {parsed['Name']}")
+                                    print(f"[{self.name}] Forwarded QUERY for {parsed['Name']} to neighbor {neighbor_name} at port {neighbor_port}")
+                                    forwarded = True
+                                    break
+                                except Exception as e:
+                                    self.log(f"[{self.name}] Forward-to-neighbor failed: {e}")
+                    if forwarded:
+                        return
+
+                # Non-border or couldn't resolve NS: if we know any NameServer for the target domain, use it
+                if target_domain:
+                    for known_name, known_port in list(self.name_to_port.items()):
+                        if known_name.startswith(f"/{target_domain}/") and "NameServer" in known_name:
+                            pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=False)
+                            try:
+                                self.sock.sendto(pkt, ("127.0.0.1", known_port))
+                                self.log(f"[{self.name}] FORWARDED QUERY -> {known_name} (port {known_port}) for {parsed['Name']}")
+                                print(f"[{self.name}] Forwarded QUERY for {parsed['Name']} to {known_name} at port {known_port}")
+                                return
+                            except Exception as e:
+                                self.log(f"[{self.name}] Forward-to-known-NS failed: {e}")
+                # otherwise fall through to default handling (buffering / ask NS later)
                 # If no domain/FIB to NS, buffer the query (fallback)
+
                 self.add_to_buffer(packet, addr, reason="No FIB route to NS for data=False query")
                 return  # done for data=False packets
 
@@ -830,6 +1067,22 @@ class Node:
             # From here: is_real_interest == True (this is the "real" Interest for the file)
             # If we don't have CS or FIB entry, buffer the real interest and ask the NS on behalf of this node.
             if table is None or table == "PIT":
+                # Before buffering and creating a NameServer query for a REAL interest,
+                # re-check whether destination is a direct neighbor and forward directly if so.
+                # Allow direct-forward when this node itself is directly connected to the destination
+                # (special-case: node is adjacent to the dest) — this executes only in the pre-NS path.
+                if is_real_interest:
+                    node_name = get_node_name(parsed["Name"])
+                    neighbor_port = self.name_to_port.get(node_name)
+                    if neighbor_port is not None:
+                        # direct-adjacent: forward straight to neighbor (no NS query needed)
+                        print(f"[{self.name}] (pre-NS) Destination {parsed['Name']} is a direct neighbor {node_name} at port {neighbor_port}, forwarding directly (real interest).")
+                        self.log(f"[{self.name}] (pre-NS) Destination {parsed['Name']} is a direct neighbor {node_name} at port {neighbor_port}, forwarding directly (real interest).")
+                        pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
+                        self.sock.sendto(pkt, ("127.0.0.1", int(neighbor_port)))
+                        return
+                # else: fall through to existing buffering + NS query logic
+
                 # Buffer the real interest (so it can be forwarded to the next hop once known)
                 self.add_to_buffer(packet, addr, reason="No FIB route available for real interest (data=True)")
                 # Now check if we've already sent a query for this Interest to the NS
@@ -888,7 +1141,70 @@ class Node:
                 next_hop = data["NextHops"]
                 print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
                 self.log(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
-                self.forward_interest(pkt_obj, ("127.0.0.1", int(next_hop)))
+                # Protect against installing a FIB that points back to the incoming interface
+                try:
+                    nh_port = int(next_hop)
+                except Exception:
+                    # try resolve if stored as name
+                    nh_port = None
+                    if isinstance(next_hop, str) and next_hop in self.name_to_port:
+                        try:
+                            nh_port = int(self.name_to_port[next_hop])
+                        except Exception:
+                            nh_port = None
+
+                # If the FIB next-hop equals the incoming interface, avoid ping-pong:
+                # buffer the real interest and ask local NameServer for a proper route.
+                incoming_port = addr[1] if addr else None
+                if nh_port is not None and incoming_port is not None and nh_port == incoming_port:
+                    self.log(f"[{self.name}] FIB next-hop {nh_port} == incoming iface {incoming_port}; buffering and querying NS to avoid ping-pong")
+                    self.add_to_buffer(packet, addr, reason="FIB loop detected (next hop == incoming iface)")
+
+                    # Check if we've already asked NS for this destination
+                    already_asked_ns = False
+                    with self.buffer_lock:
+                        for entry in reversed(self.buffer):
+                            if entry.get("destination") == parsed["Name"]:
+                                already_asked_ns = entry.get("forwarded_to_ns", False)
+                                break
+
+                    if not already_asked_ns:
+                        own_domain = self.domains[0] if self.domains else None
+                        if own_domain:
+                            ns_name = f"/{own_domain}/NameServer1"
+                            fib_entry = self.fib.get(ns_name)
+                            ns_port = None
+                            if fib_entry:
+                                ns_port = fib_entry["NextHops"]
+                            else:
+                                ns_port = self.name_to_port.get(ns_name)
+
+                            if ns_port:
+                                try:
+                                    query_pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=self.name, data_flag=False)
+                                    self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
+                                    self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} (origin={self.name}) -> {ns_name} via port {ns_port} due to FIB loop avoidance")
+                                    with self.buffer_lock:
+                                        for entry in self.buffer:
+                                            if entry.get("destination") == parsed["Name"]:
+                                                entry["forwarded_to_ns"] = True
+                                except Exception as e:
+                                    self.log(f"[{self.name}] Error sending NS query for {parsed['Name']} due to FIB loop: {e}")
+                    return
+
+                # Normal forwarding if no loop detected
+                if nh_port is not None:
+                    self.forward_interest(pkt_obj, ("127.0.0.1", nh_port))
+                else:
+                    # fallback: try to forward using string next_hop as name mapping or call forward_interest default
+                    if isinstance(next_hop, str) and next_hop in self.name_to_port:
+                        try:
+                            self.forward_interest(pkt_obj, ("127.0.0.1", int(self.name_to_port[next_hop])))
+                        except Exception:
+                            # final fallback: use forward_interest without explicit target
+                            self.forward_interest(pkt_obj)
+                    else:
+                        self.forward_interest(pkt_obj)
             return pkt_obj
 
 
@@ -1056,7 +1372,40 @@ class Node:
                     self.log(f"[{self.name}] Route reply missing dest/next_hop info: route_info={route_info}")
 
                 # Also update FIB entry for the route packet name (metadata)
-                self.add_fib(pkt_obj.name, addr[1], exp_time=5000, hop_count=len(pkt_obj.path))
+                # Instead of using the sender's port (addr[1]) which can point back toward the origin
+                # (causing ping-pong), derive the correct next-hop for reaching the destination
+                # from the returned path. If this node appears in the path, set the FIB entry to
+                # the next node after this node (toward the destination).
+                try:
+                    path_list = pkt_obj.path or parsed.get("Path") or []
+                    if isinstance(path_list, str):
+                        path_list = [p.strip() for p in path_list.split(",") if p.strip()]
+                    if path_list and self.name in path_list:
+                        idx = path_list.index(self.name)
+                        if idx < len(path_list) - 1:
+                            next_hop_name = path_list[idx + 1]
+                            # resolve port for next_hop_name
+                            next_hop_port = self.name_to_port.get(next_hop_name)
+                            if next_hop_port is None:
+                                fib_entry = self.fib.get(next_hop_name)
+                                if fib_entry:
+                                    next_hop_port = fib_entry.get("NextHops")
+                            if next_hop_port:
+                                self.add_fib(pkt_obj.name, int(next_hop_port), exp_time=5000, hop_count=len(path_list) - idx - 1)
+                    else:
+                        # fallback: if node not in path, avoid installing a route that points back
+                        # to the sender. Only install if we can resolve a sensible next-hop.
+                        possible_next = None
+                        # try to resolve the declared next_hop in the payload if present
+                        payload_json = parsed.get("RoutingInfoJson") or {}
+                        declared_next = payload_json.get("next_hop") if isinstance(payload_json, dict) else None
+                        if declared_next:
+                            possible_next = self.name_to_port.get(declared_next) or (self.fib.get(declared_next) or {}).get("NextHops")
+                        if possible_next:
+                            self.add_fib(pkt_obj.name, int(possible_next), exp_time=5000, hop_count=len(path_list))
+                except Exception as e:
+                    # If anything fails, fall back to not installing a bad FIB entry.
+                    self.log(f"[{self.name}] Failed to install FIB from ROUTE META: {e}")
                 return pkt_obj
             else:
                 # If not for this node:
@@ -1247,14 +1596,20 @@ class Node:
             return path
 
         fib_interest = strip_last_level(name)
+
+        # prefer an exact parent-key in the FIB (e.g. '/DLSU') but only if that entry came from NS
+        if fib_interest in self.fib and self.fib[fib_interest].get("Source") == "NS":
+            return "FIB", self.fib[fib_interest]
+
+        # fallback: only accept parent/fuzzy matches that were installed by the NameServer
         best_key = None
-        best_score = float('inf')
-        for key in self.fib.keys():
-            fib_key = strip_last_level(key)
-            score = self.levenshtein_distance(fib_interest, fib_key)
-            if score < 2 and score < best_score:
-                best_score = score
+        for key, entry in self.fib.items():
+            # consider keys that represent parent namespaces (strip last level of the FIB key)
+            fib_key_parent = strip_last_level(key)
+            if fib_key_parent == fib_interest and entry.get("Source") == "NS":
                 best_key = key
+                break
+
         if best_key is not None:
             return "FIB", self.fib[best_key]
 
