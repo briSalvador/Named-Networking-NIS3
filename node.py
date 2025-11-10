@@ -30,7 +30,6 @@ FRAGMENT_SIZE = 1500
 # if new route is shorter.
 
 def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False):
-def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False):
     packet_type = INTEREST
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
     seq_num = seq_num & 0xFF

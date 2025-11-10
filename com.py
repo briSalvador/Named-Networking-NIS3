@@ -25,9 +25,6 @@ if __name__ == "__main__":
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
     admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="ADMU_NameServer1_topology.txt")
     up_ns = NameServer(ns_name="/UP/NameServer1", host="127.0.0.1", port=7000, topo_file="UP_NameServer1_topology.txt")
-    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
-    admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="ADMU_NameServer1_topology.txt")
-    up_ns = NameServer(ns_name="/UP/NameServer1", host="127.0.0.1", port=7000, topo_file="UP_NameServer1_topology.txt")
     
     dpc1 = Node("/DLSU/Andrew/PC1", port=5001)
     andrew = Node("/DLSU/Andrew", port=5002)
@@ -101,15 +98,19 @@ if __name__ == "__main__":
     time.sleep(5)
 
     # Interest Testing (Levenshtein Distance)
-    dpc1.send_interest(seq_num=0, name="/DLSU/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
-    dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
+    # dpc1.send_interest(seq_num=0, name="/DLSU/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    # dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
     # dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
     # acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
-    """ dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
-    miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
-    goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
-    goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5004)) """
+    # dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
+    # miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
+    # goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
+    # Test case if destination does not have a filename
+    #dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1", target=("127.0.0.1", 5001), data_flag=False)
+    #goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5004))
     #henry.send_interest(seq_num=0, name="/DLSU/Andrew", target=("127.0.0.1", 5006))
+
+    acam1.send_interest(seq_num=0, name="/ADMU", target=("127.0.0.1", 6003), data_flag=False)
     time.sleep(5)
 
     # fib tables
@@ -119,6 +120,7 @@ if __name__ == "__main__":
     print("dpc1 FIB:", dpc1.fib)
     print("dlsu FIB:", dlsu.fib)
     print("border router FIB: ", dxa.fib)
+    print("Gonzaga FIB: ", gonzaga.fib)
 
     print("\n--- PIT Tables ---")
     print("henry PIT:", henry.pit)
