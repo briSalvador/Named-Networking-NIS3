@@ -30,6 +30,7 @@ FRAGMENT_SIZE = 1500
 # if new route is shorter.
 
 def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False):
+def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False):
     packet_type = INTEREST
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
     seq_num = seq_num & 0xFF
@@ -967,6 +968,10 @@ class Node:
             is_real_interest = parsed["DataFlag"]
             origin_node = parsed["OriginNode"]
 
+            # Determine if this Interest has a filename (i.e. more than top-level domain)
+            name_segments = parsed["Name"].strip('/').split('/') if isinstance(parsed.get("Name"), str) else []
+            has_filename = '.' in name_segments[-1] if name_segments else False
+
             # --- Encapsulation handling: INTERESTs created by NameServer use the form:
             # "ENCAP:<border_alias>|<original_name>"
             # Nodes must not send encapsulated queries to their own NameServer; instead
@@ -1082,19 +1087,36 @@ class Node:
                         self.log(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
             def get_node_name(name):
-                # Return the parent node for a given full name.
-                # Examples:
-                #   "/DLSU/hello.txt" -> "/DLSU"
-                #   "/DLSU/Miguel/cam1/hello.txt" -> "/DLSU/Miguel/cam1"
+                # Return the node/alias that corresponds to the destination namespace.
+                # For ENCAPs return the candidate border alias; otherwise return top-level or first path component.
+                if not isinstance(name, str) or name == "":
+                    return name
+
+                if name.startswith("ENCAP:"):
+                    try:
+                        enc = name.split(":", 1)[1]
+                        candidate = enc.split("|", 1)[0]
+                        # candidate may contain space-separated aliases, return the first alias token
+                        return candidate.split()[0]
+                    except Exception:
+                        pass
+
+                # Handle normal path-like strings
+                name = name.strip('/')
                 if not name:
-                    return name
-                s = name.strip('/')
-                parts = s.split('/')
-                if len(parts) == 0:
-                    return name
-                if len(parts) == 1:
-                    return '/' + parts[0]
-                return '/' + '/'.join(parts[:-1])
+                    return '/'
+
+                parts = name.split('/')
+                last_part = parts[-1]
+
+                # Check if the last part looks like a file (has a '.' that's not at start or end)
+                if '.' in last_part and not last_part.startswith('.') and not last_part.endswith('.'):
+                    # Remove the filename part
+                    path_without_file = '/'.join(parts[:-1])
+                    return '/' + path_without_file if path_without_file else '/'
+                else:
+                    # It's a folder or doesn't have an extension
+                    return '/' + name
             
             def _has_asked_ns(dest_name):
                 # Return True if this node has already sent an NS query for dest_name
@@ -1110,12 +1132,6 @@ class Node:
             # Check if destination is a direct neighbor
             node_name = get_node_name(parsed["Name"])
             neighbor_port = self.name_to_port.get(node_name)
-            # Allow direct neighbor forwarding only when:
-            #  - this node is the originator (it created the query),
-            #  OR
-            #  - this is a REAL_INTEREST and this node either already asked its NameServer
-            #    for this destination (so it attempted local resolution) OR it already has
-            #    a FIB entry for the destination.
             allow_direct = False
             if neighbor_port is not None:
                 if origin_node == self.name:
@@ -1126,12 +1142,19 @@ class Node:
                         allow_direct = True
 
             if neighbor_port is not None and allow_direct:
-                role = "originator" if origin_node == self.name else "in-transit(resolved)"
-                print(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
-                self.log(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
-                pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
-                self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
-                return
+                if has_filename:
+                    # Forward directly only if there's a filename
+                    role = "originator" if origin_node == self.name else "in-transit(resolved)"
+                    print(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
+                    self.log(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
+                    pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
+                    self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
+                    return
+                else:
+                    # Drop the interest: no filename, so no forwarding
+                    self.log(f"[{self.name}] Dropped interest for {parsed['Name']} as it's a direct neighbor without filename")
+                    print(f"[{self.name}] Dropped interest for {parsed['Name']} as it's a direct neighbor without filename")
+                    return
             # Otherwise do not forward directly here; let the normal NS-query path handle it.
 
             # If this is a query to the NameServer (data_flag == False)
@@ -1640,17 +1663,10 @@ class Node:
                 if pending_ifaces:
                     for p in list(pending_ifaces):
                         try:
-                            port_int = int(p)
-                        except Exception:
-                            continue
-                        # avoid sending back to self or to the sender
-                        if port_int == self.port or (addr and len(addr) > 1 and port_int == addr[1]):
-                            continue
-                        try:
-                            self.sock.sendto(packet, ("127.0.0.1", port_int))
-                            self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {port_int}")
+                            self.sock.sendto(packet, ("127.0.0.1", int(p)))
+                            self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
                         except Exception as e:
-                            self.log(f"[{self.name}] Error forwarding ROUTE DATA to NS-query iface {port_int}: {e}")
+                            self.log(f"[{self.name}] Error forwarding ROUTE DATA to NS-query iface {p}: {e}")
                     # clear recorded pending query interfaces for this destination
                     try:
                         del self.ns_query_table[dest_name]
@@ -1709,19 +1725,12 @@ class Node:
                     self.log(f"[{self.name}] Falling back to PIT forwarding for ROUTE DATA.")
                     for pit_entry in self.pit.values():
                         if isinstance(pit_entry, list):
-                            for port in set(pit_entry):
+                            for port in pit_entry:
                                 try:
-                                    port_int = int(port)
-                                except Exception:
-                                    continue
-                                # avoid forwarding back to self or sender
-                                if port_int == self.port or (addr and len(addr) > 1 and port_int == addr[1]):
-                                    continue
-                                try:
-                                    self.sock.sendto(packet, ("127.0.0.1", port_int))
-                                    self.log(f"[{self.name}] Forwarded ROUTE DATA to PIT port {port_int}")
+                                    self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                                    self.log(f"[{self.name}] Forwarded ROUTE DATA to PIT port {port}")
                                 except Exception as e:
-                                    self.log(f"[{self.name}] Error forwarding ROUTE DATA to PIT port {port_int}: {e}")
+                                    self.log(f"[{self.name}] Error forwarding ROUTE DATA to PIT port {port}: {e}")
                 return pkt_obj
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")

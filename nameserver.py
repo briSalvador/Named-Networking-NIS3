@@ -468,8 +468,15 @@ class NameServer:
         print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name}")
 
         original_name = dest_name
-        # destination for routing calculation is the parent entity (strip file/last level)
-        dest_node = self.strip_last_level(dest_name)
+        # destination for routing calculation:
+        # - If the requested name exactly matches a node in the topology graph,
+        #   treat it as a node-to-node query (do not strip last level).
+        # - Otherwise, assume the request includes a file and strip the last level
+        #   to derive the node that contains the object.
+        if dest_name in self.graph:
+            dest_node = dest_name
+        else:
+            dest_node = self.strip_last_level(dest_name)
 
         # helper: extract top-level domain from a name like "/ADMU/Gonzaga/..."
         def _top_domain(name):

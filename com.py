@@ -25,6 +25,9 @@ if __name__ == "__main__":
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
     admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="ADMU_NameServer1_topology.txt")
     up_ns = NameServer(ns_name="/UP/NameServer1", host="127.0.0.1", port=7000, topo_file="UP_NameServer1_topology.txt")
+    ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
+    admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="ADMU_NameServer1_topology.txt")
+    up_ns = NameServer(ns_name="/UP/NameServer1", host="127.0.0.1", port=7000, topo_file="UP_NameServer1_topology.txt")
     
     dpc1 = Node("/DLSU/Andrew/PC1", port=5001)
     andrew = Node("/DLSU/Andrew", port=5002)
@@ -49,6 +52,11 @@ if __name__ == "__main__":
 
     # load all nodes
     for node in nodes:
+        # NameServers and Nodes both implement load_neighbors_from_file
+        try:
+            node.load_neighbors_from_file("neighbors.txt")
+        except Exception:
+            pass
         # NameServers and Nodes both implement load_neighbors_from_file
         try:
             node.load_neighbors_from_file("neighbors.txt")
