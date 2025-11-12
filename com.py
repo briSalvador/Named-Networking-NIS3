@@ -412,6 +412,7 @@ def nameserver_debug_menu(ns):
 
 controller = DebugController(nodes)
 
+"""
 input_thread = threading.Thread(target=debug_input_loop, args=(controller,), daemon=True)
 input_thread.start()
 
@@ -423,3 +424,6 @@ try:
 except KeyboardInterrupt:
     for node in nodes:
         node.stop()
+"""
+from gui import LogGUI
+LogGUI(controller).run()
