@@ -2,6 +2,7 @@ import socket
 import struct
 import threading
 import time
+import os
 import json
 from RouteDataPacket import RouteDataPacket
 from datetime import datetime
@@ -13,6 +14,7 @@ ROUTING_DATA = 0x3
 HELLO = 0x4
 UPDATE = 0x5
 ERROR = 0x6
+ROUTE_ACK = 0x7
 
 ACK_FLAG = 0x1
 RET_FLAG = 0x2
@@ -113,21 +115,69 @@ def create_hello_packet(name):
     return packet
 
 def parse_update_packet(packet):
-    packet_type_flags, name_length, update_info_length = struct.unpack("!BBH", packet[:4])
-    name = packet[4:4+name_length].decode("utf-8")
-    update_info_start = 4 + name_length
-    update_info_end = update_info_start + update_info_length
-    update_info = packet[update_info_start:update_info_end].decode("utf-8")
-    # update_info format: "<name_of_destination> <next_hop_port> <number_of_hops>"
-    parts = update_info.split()
-    next_hop = parts[1] if len(parts) > 1 else None
-    number_of_hops = int(parts[2]) if len(parts) > 2 else None
+    """
+    Parses a neighbor UPDATE packet created by create_neighbor_update_packet().
+    Returns a dict:
+      {
+        "PacketType": <int>,
+        "Flags": <int>,
+        "NodeNames": ["/DLSU/Router1", "/ADMU/Router1"],
+        "NeighborNames": ["/DLSU/Andrew", "/DLSU/Gokongwei"]
+      }
+    """
+    try:
+        packet_type_flags, node_name_length, info_length = struct.unpack("!BBH", packet[:4])
+
+        # Decode node name
+        node_start = 4
+        node_end = node_start + node_name_length
+        node_name = packet[node_start:node_end].decode("utf-8")
+
+        # Decode update info
+        info_start = node_end
+        info_end = info_start + info_length
+        update_info = packet[info_start:info_end].decode("utf-8")
+
+        # Expected format: "<node_name> | <neighbor_name>"
+        if "|" in update_info:
+            node_part, neighbor_part = update_info.split("|", 1)
+        else:
+            # fallback (old format without delimiter)
+            parts = update_info.split(maxsplit=1)
+            node_part = parts[0] if parts else ""
+            neighbor_part = parts[1] if len(parts) > 1 else ""
+
+        # Split by spaces for multi-name support
+        node_names = [n.strip() for n in node_part.strip().split() if n.strip()]
+        neighbor_names = [n.strip() for n in neighbor_part.strip().split() if n.strip()]
+
+        return {
+            "PacketType": (packet_type_flags >> 4) & 0xF,
+            "Flags": packet_type_flags & 0xF,
+            "Name": node_names,
+            "NeighborNames": neighbor_names
+        }
+
+    except Exception as e:
+        print(f"[NS parse_neighbor_update_packet] Error parsing packet: {e}")
+        return None
+    
+def parse_route_ack_packet(packet):
+    """Parse ROUTE_ACK packets sent by nodes confirming a border path."""
+    if len(packet) < 4:
+        return None
+    packet_type_flags, seq_num, info_size, name_length = struct.unpack("!BBBB", packet[:4])
+    name_start = 4
+    name_end = name_start + name_length
+    if len(packet) < name_end:
+        return None
+    name = packet[name_start:name_end].decode("utf-8")
     return {
         "PacketType": (packet_type_flags >> 4) & 0xF,
         "Flags": packet_type_flags & 0xF,
-        "Name": name,
-        "NextHop": next_hop,
-        "NumberOfHops": number_of_hops
+        "SequenceNumber": seq_num,
+        "NameLength": name_length,
+        "Name": name
     }
 
 class NameServer:
@@ -145,7 +195,7 @@ class NameServer:
         self.neighbor_table = {}
 
         self.graph = defaultdict(set)
-        self._load_topology_file(self.topo_file)
+        #self._load_topology_file(self.topo_file)
 
         self.running = True
         self.listener_thread = threading.Thread(target=self._listen, daemon=True)
@@ -156,6 +206,8 @@ class NameServer:
 
         #print(f"[NS {self.ns_name}] up at {self.host}:{self.port}")
         #print(f"[NS {self.ns_name}] loaded topology with {len(self.graph)} nodes from {self.topo_file}")
+
+        self.pending_interests = {}  # {enc_name: {"addr": addr, "origin": src_name}}
 
     def _periodic_update(self):
         while self.running:
@@ -240,6 +292,8 @@ class NameServer:
                     self._handle_update(data, addr)
                 elif pkt_type == INTEREST:
                     self._handle_interest(data, addr)
+                elif pkt_type == ROUTE_ACK:
+                    self._handle_route_ack(data, addr)
                 else:
                     pass
             except Exception as e:
@@ -260,19 +314,160 @@ class NameServer:
             #print(f"[NS {self.ns_name}] HELLO from {node_name} at {addr} (added as neighbor)")
 
     def _handle_update(self, packet, addr):
-        parsed = parse_update_packet(packet)
-        node_name = parsed["Name"]
-        self.port_to_name[addr[1]] = node_name
-        self.name_to_port[node_name] = addr[1]
-        print(f"[NS {self.ns_name}] UPDATE from {node_name} at {addr}")
+        """
+        Handles neighbor UPDATE packets and updates the NS topology.
+        Supports multi-name nodes and domain filtering.
+        """
+        try:
+            parsed = parse_update_packet(packet)
+            if not parsed:
+                print(f"[NS {self.ns_name}] Failed to parse UPDATE from {addr}")
+                return
+
+            # Only process neighbor update packets (flag 0x2)
+            if parsed["Flags"] != 0x2:
+                return
+
+            src_nodes = parsed.get("Name", [])
+            neighbor_nodes = parsed.get("NeighborNames", [])
+
+            if not src_nodes or not neighbor_nodes:
+                print(f"[NS {self.ns_name}] Ignored UPDATE missing node or neighbor data from {addr}")
+                return
+
+            # Normalize node and neighbor lists
+            src_nodes = [n.strip() for n in src_nodes if n.strip()]
+            neighbor_nodes = [n.strip() for n in neighbor_nodes if n.strip()]
+
+            # --- Check if update belongs to this NS's domain ---
+            ns_domain = self.ns_name.strip("/").split("/")[0]  # e.g., "DLSU" from "/DLSU/NameServer1"
+
+            # Determine if at least one of the node's names belongs to this NS's domain
+            in_domain = any(
+                n.strip("/").split("/")[0] == ns_domain for n in src_nodes
+            )
+
+            if not in_domain:
+                print(f"[NS {self.ns_name}] Ignored UPDATE not in domain ({ns_domain}): {' '.join(src_nodes)}")
+                return
+            
+            combined_name = " ".join(src_nodes)
+
+            # Register node-port mapping
+            self.port_to_name[addr[1]] = combined_name
+            self.name_to_port[combined_name] = addr[1]
+
+            # Ensure node exists in the graph
+            if combined_name not in self.graph or not isinstance(self.graph[combined_name], set):
+                self.graph[combined_name] = set()
+
+            # Add bidirectional edges
+            combined_neighbor = " ".join(neighbor_nodes)
+
+            # Add connection both ways
+            self.graph[combined_name].add(combined_neighbor)
+            if combined_neighbor not in self.graph:
+                self.graph[combined_neighbor] = set()
+            self.graph[combined_neighbor].add(combined_name)
+
+            print(f"[NS {self.ns_name}] UPDATE accepted: {combined_name} ↔ {combined_neighbor}")
+
+            # --- Save topology to file ---
+            self._write_topology_to_file()
+
+        except Exception as e:
+            print(f"[NS {self.ns_name}] Error handling UPDATE: {e}")
+
+    def _write_topology_to_file(self):
+        """
+        Writes the current topology graph to '<ns_name>_topology.txt'.
+        - Each node (including aliases) appears on its own line, even if neighbor sets are identical.
+        - Multi-name (border router) nodes are grouped as one name with spaces (not commas).
+        - When border routers appear as neighbors, their full grouped names are shown.
+        """
+        try:
+            safe_name = self.ns_name.replace("/", "_").strip("_")
+            filename = f"{safe_name}_topology.txt"
+            dirpath = os.path.dirname(filename)
+            if dirpath and not os.path.exists(dirpath):
+                os.makedirs(dirpath, exist_ok=True)
+
+            # Determine the NS's own domain, e.g., "DLSU" from "/DLSU/NameServer1"
+            ns_domain = self.ns_name.strip("/").split("/")[0] if self.ns_name else ""
+
+            # Build alias mapping: each alias points to its full multi-name (border router) group
+            alias_map = {}
+            for port, aliases_str in getattr(self, "port_to_name", {}).items():
+                if isinstance(aliases_str, str):
+                    aliases = [a.strip() for a in aliases_str.split() if a.strip()]
+                elif isinstance(aliases_str, (list, tuple)):
+                    aliases = [a.strip() for a in aliases_str if a.strip()]
+                else:
+                    continue
+                if not aliases:
+                    continue
+                combined = " ".join(sorted(set(aliases)))
+                for a in aliases:
+                    alias_map[a] = combined
+
+            def top_level(name):
+                segs = name.strip("/").split("/")
+                return segs[0] if segs else ""
+
+            lines = []
+            written = set()
+
+            for node in sorted(self.graph.keys()):
+                if not isinstance(node, str) or not node.startswith("/"):
+                    continue
+                if node in written:
+                    continue
+
+                # Get grouped alias name if exists
+                node_group = alias_map.get(node, node)
+
+                # Mark all names in this group as written
+                for part in node_group.split():
+                    written.add(part)
+
+                # Skip nodes outside this NS's domain
+                if not any(top_level(a) == ns_domain for a in node_group.split()):
+                    continue
+
+                # Gather all neighbors for this node
+                neighbors = self.graph.get(node, set())
+
+                # Replace any alias neighbors with their grouped form
+                expanded_neighbors = set()
+                for n in neighbors:
+                    if not isinstance(n, str) or not n.startswith("/"):
+                        continue
+                    expanded_neighbors.add(alias_map.get(n, n))
+
+                # Sort for consistent output
+                sorted_neighbors = sorted(expanded_neighbors)
+
+                # Build output line
+                neighbor_str = ", ".join(sorted_neighbors)
+                lines.append(f"{node_group}: {neighbor_str}\n")
+
+            # Write topology file (overwrite existing)
+            with open(filename, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+
+            print(f"[NS {self.ns_name}] Topology updated and saved to {filename}")
+
+        except Exception as e:
+            print(f"[NS {self.ns_name}] Error writing topology file: {e}")
 
     def strip_last_level(self, path):
-            if not path:
-                return path
-            segments = path.strip('/').split('/')
-            if len(segments) > 1:
-                return '/' + '/'.join(segments[:-1])
+        """Utility to remove the last level from a hierarchical name."""
+        if not path:
             return path
+        segments = path.strip('/').split('/')
+        if len(segments) > 1:
+            return '/' + '/'.join(segments[:-1])
+        return path
 
     def _handle_interest(self, packet, addr):
         """
@@ -342,7 +537,6 @@ class NameServer:
                             return self.name_to_port[alias], alias
                 return None, None
 
-            forwarded_any = False
             for candidate in border_candidates:
                 # 1) Try path from THIS NS to the candidate (so NS can send to a neighbor it knows)
                 path_from_ns = self._shortest_path(self.ns_name, candidate)
@@ -355,6 +549,9 @@ class NameServer:
                             enc_name = f"ENCAP:{candidate}|{original_name}"
                             enc_pkt = create_interest_packet(seq_num=seq_num, name=enc_name, flags=parsed.get("Flags",0), origin_node=src_name, data_flag=False)
                             self.sock.sendto(enc_pkt, (self.host, int(port)))
+                            # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
+                            # CHANGED: Store border_router (candidate) in pending_interests for later use in ACK handling
+                            self.pending_interests[original_name] = {"addr": addr, "origin": src_name, "border_router": candidate}
                             print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]")
                             return
                         except Exception as e:
@@ -380,6 +577,9 @@ class NameServer:
                             enc_name = f"ENCAP:{candidate}|{original_name}"
                             enc_pkt = create_interest_packet(seq_num=seq_num, name=enc_name, flags=parsed.get("Flags",0), origin_node=src_name, data_flag=False)
                             self.sock.sendto(enc_pkt, (self.host, int(port)))
+                            # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
+                            # CHANGED: Store border_router (candidate) in pending_interests for later use in ACK handling
+                            self.pending_interests[original_name] = {"addr": addr, "origin": src_name, "border_router": candidate}
                             print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]")
                             return
                         except Exception as e:
@@ -392,6 +592,9 @@ class NameServer:
                             enc_name = f"ENCAP:{candidate}|{original_name}"
                             enc_pkt = create_interest_packet(seq_num=seq_num, name=enc_name, flags=parsed.get("Flags",0), origin_node=src_name, data_flag=False)
                             self.sock.sendto(enc_pkt, (self.host, int(self.name_to_port[alias])))
+                            # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
+                            # CHANGED: Store border_router (candidate) in pending_interests for later use in ACK handling
+                            self.pending_interests[original_name] = {"addr": addr, "origin": src_name, "border_router": candidate}
                             print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]")
                             return
                         except Exception as e:
@@ -423,7 +626,85 @@ class NameServer:
 
         self.sock.sendto(resp, addr)
         print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
-        
+
+    def _handle_route_ack(self, packet, addr):
+        parsed = parse_route_ack_packet(packet)
+        if not parsed:
+            print(f"[NS {self.ns_name}] Failed to parse ROUTE_ACK from {addr}")
+            return
+
+        dest_name = parsed["Name"]
+        seq_num = parsed["SequenceNumber"]
+
+        print(f"[NS {self.ns_name}] Received ROUTE_ACK for {dest_name} from {addr}")
+
+        pending = self.pending_interests.pop(dest_name, None)
+        if not pending:
+            print(f"[NS {self.ns_name}] No pending ENCAP interest for {dest_name} (already processed or not tracked)")
+            return
+
+        print(f"[NS {self.ns_name}] Cleared pending ENCAP interest for {dest_name}")
+
+        origin_node = pending["origin"]
+        border_router = pending["border_router"]
+        original_target = dest_name
+
+        # Compute path from origin to border router (used by node to install FIB and forward toward border)
+        path_from_origin = self._shortest_path(origin_node, border_router)
+        if not path_from_origin:
+            print(f"[NS {self.ns_name}] Cannot find path from origin {origin_node} to border router {border_router}")
+            return
+
+        # Also compute path from NS to origin, in case we need to forward via first hop
+        path_to_origin = self._shortest_path(self.ns_name, origin_node)
+        if not path_to_origin or len(path_to_origin) < 2:
+            print(f"[NS {self.ns_name}] Cannot find path to origin {origin_node}")
+            return
+
+        first_hop_border = path_from_origin[1] if len(path_from_origin) > 1 else border_router
+        first_hop_origin = path_to_origin[1]
+
+        # Build reply payload
+        route_payload = {
+            "origin_name": origin_node,
+            "path": path_from_origin,
+            "border_router": border_router,
+            "dest": original_target,
+            "next_hop": first_hop_border,
+            "path_to_origin": path_to_origin,
+            "note": "ACK confirmed path via border router"
+        }
+
+        resp = create_route_data_packet(
+            seq_num=seq_num,
+            name=original_target,
+            payload=route_payload,
+            flags=ACK_FLAG
+        )
+
+        # Prefer sending directly to the origin if we know its port
+        origin_port = self.name_to_port.get(origin_node)
+        if origin_port:
+            try:
+                self.sock.sendto(resp, (self.host, int(origin_port)))
+                print(f"[NS {self.ns_name}] Sent ROUTE_DATA (border_first_hop={first_hop_border}) "
+                      f"to origin {origin_node} (port {origin_port}) for {original_target}")
+            except Exception as e:
+                print(f"[NS {self.ns_name}] Error sending ROUTE_DATA directly to origin {origin_node}: {e}")
+            return  # do not also send to first_hop_origin
+
+        # Otherwise, forward via the first hop toward the origin
+        port = self.name_to_port.get(first_hop_origin)
+        if not port:
+            print(f"[NS {self.ns_name}] Cannot find port for first_hop {first_hop_origin} to origin {origin_node}")
+            return
+        try:
+            self.sock.sendto(resp, (self.host, int(port)))
+            print(f"[NS {self.ns_name}] Sent ROUTE_DATA (border_first_hop={first_hop_border}) "
+                  f"to first_hop {first_hop_origin} (port {port}) for {original_target} toward origin {origin_node}")
+        except Exception as e:
+            print(f"[NS {self.ns_name}] Error sending ROUTE_DATA to first hop {first_hop_origin}: {e}")
+            
     def _shortest_path(self, src, dest):
         if src not in self.graph or dest not in self.graph:
             return None
