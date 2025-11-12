@@ -98,7 +98,7 @@ if __name__ == "__main__":
     time.sleep(5)
 
     # Interest Testing (Levenshtein Distance)
-    # dpc1.send_interest(seq_num=0, name="/DLSU/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    dpc1.send_interest(seq_num=0, name="/DLSU", target=("127.0.0.1", 5001), data_flag=False)
     # dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
     # dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
     # acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     #goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5004))
     #henry.send_interest(seq_num=0, name="/DLSU/Andrew", target=("127.0.0.1", 5006))
 
-    acam1.send_interest(seq_num=0, name="/ADMU", target=("127.0.0.1", 6003), data_flag=False)
+    #acam1.send_interest(seq_num=0, name="/ADMU", `target=("127.0.0.1", 6003), data_flag=False)
     time.sleep(5)
 
     # fib tables
@@ -120,7 +120,8 @@ if __name__ == "__main__":
     print("dpc1 FIB:", dpc1.fib)
     print("dlsu FIB:", dlsu.fib)
     print("border router FIB: ", dxa.fib)
-    print("Gonzaga FIB: ", gonzaga.fib)
+    print("gonzaga FIB: ", gonzaga.fib)
+    print("goks FIB: ", goks.fib)
 
     print("\n--- PIT Tables ---")
     print("henry PIT:", henry.pit)

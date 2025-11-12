@@ -19,6 +19,10 @@ ACK_FLAG = 0x1
 RET_FLAG = 0x2
 TRUNC_FLAG = 0x3
 
+# Error codes
+FORMAT_ERROR = 0x1
+NAME_ERROR = 0x2
+
 def create_data_packet(seq_num, name, payload, flags=0x0):
     packet_type = DATA
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
@@ -49,6 +53,56 @@ def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=F
     header = struct.pack("!BBB", packet_type_flags, seq_num, name_length)
     pkt = header + name_bytes + struct.pack("!B", origin_length) + origin_bytes + data_flag_byte
     return pkt
+
+def create_error_packet(seq_num, name, error_code, origin_node="", flags=0x0):
+    """
+    Build an ERROR packet with origin node info:
+    Header: packet_type&flags (1 byte), seq_num (1 byte),
+            error_code (1 byte), name_length (1 byte)
+    Then: name (variable), origin_length (1 byte), origin_node (variable)
+    """
+    packet_type = ERROR
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    seq_num = seq_num & 0xFF
+    err_code = error_code & 0xFF
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes) & 0xFF
+    origin_bytes = origin_node.encode("utf-8")
+    origin_length = len(origin_bytes) & 0xFF
+
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, err_code, name_length)
+    packet = header + name_bytes + struct.pack("!B", origin_length) + origin_bytes
+    return packet
+
+def parse_error_packet(packet):
+    if len(packet) < 5:
+        raise ValueError("Invalid ERROR packet: too short")
+
+    packet_type_flags, seq_num, err_code, name_length = struct.unpack("!BBBB", packet[:4])
+    name_start = 4
+    name_end = name_start + name_length
+    name = packet[name_start:name_end].decode("utf-8")
+
+    if len(packet) > name_end:
+        origin_length = packet[name_end]
+        origin_start = name_end + 1
+        origin_end = origin_start + origin_length
+        origin_node = packet[origin_start:origin_end].decode("utf-8")
+    else:
+        origin_node = ""
+
+    packet_type = (packet_type_flags >> 4) & 0xF
+    flags = packet_type_flags & 0xF
+
+    return {
+        "PacketType": packet_type,
+        "Flags": flags,
+        "SequenceNumber": seq_num,
+        "ErrorCode": err_code,
+        "Name": name,
+        "OriginNode": origin_node
+    }
 
 def create_route_data_packet(seq_num, name, payload, flags=0x0):
     packet_type = ROUTING_DATA
@@ -454,9 +508,24 @@ class NameServer:
         - Computes shortest path on graph from topology.txt.
         - Replies with ROUTING_DATA or forwards INTEREST to border router if dest is outside domain.
         """
-        parsed = parse_interest_packet(packet)
-        dest_name = parsed["Name"]
+        # Parse INTEREST safely; if parsing fails, send FORMAT_ERROR back to sender
+        try:
+            parsed = parse_interest_packet(packet)
+        except Exception as e:
+            print(f"[NS {self.ns_name}] Failed to parse INTEREST from {addr}: {e}")
+            # attempt to extract seq_num if present
+            seq_num = packet[1] if len(packet) > 1 else 0
+            origin_name = self.port_to_name.get(addr[1], "UNKNOWN")
+            # fix later
+            err_pkt = create_error_packet(seq_num, origin_name, FORMAT_ERROR, "UNKNOWN")
+            try:
+                self.sock.sendto(err_pkt, addr)
+                print(f"[NS {self.ns_name}] Sent FORMAT_ERROR to {addr} (origin={origin_name})")
+            except Exception as se:
+                print(f"[NS {self.ns_name}] Failed to send FORMAT_ERROR to {addr}: {se}")
+            return
 
+        dest_name = parsed["Name"]
         seq_num = parsed["SequenceNumber"]
 
         src_name = parsed["OriginNode"]
@@ -575,12 +644,13 @@ class NameServer:
         # Normal handling: compute path to destination inside this domain
         path = self._shortest_path(src_name, dest_node)
         if not path:
-            route_name = dest_node
-            payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_node}
-            payload = json.dumps(payload_obj)
-            resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=payload, flags=ACK_FLAG)
-            self.sock.sendto(resp, addr)
-            print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
+            # Name doesn't exist in this NS's graph -> emit ERROR(Name Error)
+            err_pkt = create_error_packet(seq_num, original_name, NAME_ERROR, src_name)
+            try:
+                self.sock.sendto(err_pkt, addr)
+                print(f"[NS {self.ns_name}] No path. Sent NAME_ERROR for {original_name} to {addr}")
+            except Exception as e:
+                print(f"[NS {self.ns_name}] Failed to send NAME_ERROR to {addr}: {e}")
             return
 
         next_hop = path[1] if len(path) >= 2 else dest_node

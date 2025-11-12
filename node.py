@@ -23,6 +23,12 @@ ACK_FLAG = 0x1
 RET_FLAG = 0x2
 TRUNC_FLAG = 0x3
 
+# Error codes
+FORMAT_ERROR = 0x1
+NAME_ERROR = 0x2
+NO_DATA_ERROR = 0X3
+DROPPED_ERROR = 0X4
+
 FRAGMENT_SIZE = 1500
 
 # TODO (As of Sep 30): 
@@ -57,6 +63,56 @@ def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_
     packet = header + name_bytes + payload_bytes
     return packet
 
+def create_error_packet(seq_num, name, error_code, origin_node="", flags=0x0):
+    """
+    Build an ERROR packet with origin node info:
+    Header: packet_type&flags (1 byte), seq_num (1 byte),
+            error_code (1 byte), name_length (1 byte)
+    Then: name (variable), origin_length (1 byte), origin_node (variable)
+    """
+    packet_type = ERROR
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    seq_num = seq_num & 0xFF
+    err_code = error_code & 0xFF
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes) & 0xFF
+    origin_bytes = origin_node.encode("utf-8")
+    origin_length = len(origin_bytes) & 0xFF
+
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, err_code, name_length)
+    packet = header + name_bytes + struct.pack("!B", origin_length) + origin_bytes
+    return packet
+
+def parse_error_packet(packet):
+    if len(packet) < 5:
+        raise ValueError("Invalid ERROR packet: too short")
+
+    packet_type_flags, seq_num, err_code, name_length = struct.unpack("!BBBB", packet[:4])
+    name_start = 4
+    name_end = name_start + name_length
+    name = packet[name_start:name_end].decode("utf-8")
+
+    if len(packet) > name_end:
+        origin_length = packet[name_end]
+        origin_start = name_end + 1
+        origin_end = origin_start + origin_length
+        origin_node = packet[origin_start:origin_end].decode("utf-8")
+    else:
+        origin_node = ""
+
+    packet_type = (packet_type_flags >> 4) & 0xF
+    flags = packet_type_flags & 0xF
+
+    return {
+        "PacketType": packet_type,
+        "Flags": flags,
+        "SequenceNumber": seq_num,
+        "ErrorCode": err_code,
+        "Name": name,
+        "OriginNode": origin_node
+    }
+
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
     name_start = 3
@@ -69,6 +125,16 @@ def parse_interest_packet(packet):
     data_flag = bool(packet[origin_end])  # 1 byte after origin
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
+
+    # Split name into node_name and file_name
+    name_segments = name.strip('/').split('/') if isinstance(name, str) else []
+    if name_segments and '.' in name_segments[-1]:
+        file_name = name_segments[-1]
+        node_name = '/' + '/'.join(name_segments[:-1]) if len(name_segments) > 1 else '/' + name_segments[0]
+    else:
+        file_name = None
+        node_name = '/' + '/'.join(name_segments) if name_segments else name
+
     return {
         "PacketType": packet_type,
         "Flags": flags,
@@ -77,6 +143,8 @@ def parse_interest_packet(packet):
         "Name": name,
         "OriginNode": origin_node,
         "DataFlag": data_flag,
+        "NodeName": node_name,
+        "FileName": file_name,
     }
 
 def parse_route_data_packet(packet):
@@ -749,7 +817,7 @@ class Node:
                 # with self.buffer_lock:
                     # Add raw packet to buffer first
                     #self.buffer.append((data, addr))
-                print(f"[{self.name}] Received packet from {addr}, added to buffer (size={len(self.buffer)})")
+                #print(f"[{self.name}] Received packet from {addr}, added to buffer (size={len(self.buffer)})")
             except Exception as e:
                 print(f"[{self.name}] Listener error: {e}")
                 break
@@ -825,8 +893,8 @@ class Node:
                                             pass
                                     continue
                                 elif entry_status != "resolved":
-                                    self.receive_packet(entry["packet"], entry["addr"])
                                     self.buffer.remove(entry)
+                                    self.receive_packet(entry["packet"], entry["addr"])
                             except Exception as e:
                                 self.log(f"BUFFER_ENTRY_PROC_EXC: {e}")
                 # sleep a bit
@@ -966,10 +1034,9 @@ class Node:
             parsed = parse_interest_packet(packet)
             is_real_interest = parsed["DataFlag"]
             origin_node = parsed["OriginNode"]
-
-            # Determine if this Interest has a filename (i.e. more than top-level domain)
-            name_segments = parsed["Name"].strip('/').split('/') if isinstance(parsed.get("Name"), str) else []
-            has_filename = '.' in name_segments[-1] if name_segments else False
+            node_name = parsed.get("NodeName")
+            file_name = parsed.get("FileName")
+            has_filename = file_name is not None
 
             # --- Encapsulation handling: INTERESTs created by NameServer use the form:
             # "ENCAP:<border_alias>|<original_name>"
@@ -1053,7 +1120,7 @@ class Node:
                                 # leave packet buffered and return
                         return
                     # No NS info: buffer and wait (as fallback)
-                    self.add_to_buffer(packet, addr, reason=f"No NS to query for border {enc_border} for ENCAP query")
+                    #self.add_to_buffer(packet, addr, reason=f"No NS to query for border {enc_border} for ENCAP query")
                     return
             # --- end encapsulation handling
 
@@ -1129,7 +1196,6 @@ class Node:
                 return False
 
             # Check if destination is a direct neighbor
-            node_name = get_node_name(parsed["Name"])
             neighbor_port = self.name_to_port.get(node_name)
             allow_direct = False
             if neighbor_port is not None:
@@ -1144,15 +1210,29 @@ class Node:
                 if has_filename:
                     # Forward directly only if there's a filename
                     role = "originator" if origin_node == self.name else "in-transit(resolved)"
-                    print(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
-                    self.log(f"[{self.name}] ({role}) Destination {parsed['Name']} is a direct neighbor node {node_name} at port {neighbor_port}, forwarding directly.")
+                    print(f"[{self.name}] ({role}) Destination {node_name} is a direct neighbor node at port {neighbor_port}, forwarding file '{file_name}' directly.")
+                    self.log(f"[{self.name}] ({role}) Destination {node_name} is a direct neighbor node at port {neighbor_port}, forwarding file '{file_name}' directly.")
                     pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
                     self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
                     return
                 else:
                     # Drop the interest: no filename, so no forwarding
-                    self.log(f"[{self.name}] Dropped interest for {parsed['Name']} as it's a direct neighbor without filename")
-                    print(f"[{self.name}] Dropped interest for {parsed['Name']} as it's a direct neighbor without filename")
+                    # Create and send DROPPED_ERROR packet to PIT interfaces
+                    error_pkt = create_error_packet(parsed["SequenceNumber"], parsed["Name"], DROPPED_ERROR, origin_node=origin_node)
+                    pit_ifaces = self.pit.get(parsed["Name"], [])
+                    if pit_ifaces:
+                        for iface_port in list(pit_ifaces):
+                            self.log(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to PIT iface {iface_port}")
+                            print(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to PIT iface {iface_port}")
+                            self.sock.sendto(error_pkt, ("127.0.0.1", int(iface_port)))
+                        self.remove_pit(parsed["Name"])
+                    else:
+                        # fallback: send to requester if PIT is missing
+                        self.sock.sendto(error_pkt, addr)
+                        self.log(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to {addr} (no PIT entry)")
+                        print(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to {addr} (no PIT entry)")
+                    self.log(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
+                    print(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
                     return
             # Otherwise do not forward directly here; let the normal NS-query path handle it.
 
@@ -1253,8 +1333,6 @@ class Node:
 
             # From here: is_real_interest == True (this is the "real" Interest for the file)
             # If we don't have CS or FIB entry, buffer the real interest and ask the NS on behalf of this node.
-            # From here: is_real_interest == True (this is the "real" Interest for the file)
-            # If we don't have CS or FIB entry, buffer the real interest and ask the NS on behalf of this node.
             if table is None or table == "PIT":
                 # Before buffering and creating a NameServer query for a REAL interest,
                 # re-check whether destination is a direct neighbor and forward directly if so.
@@ -1270,6 +1348,28 @@ class Node:
                         pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
                         self.sock.sendto(pkt, ("127.0.0.1", int(neighbor_port)))
                         return
+                    # Insert error packet logic: if this node is the target and file not found in CS, return error
+                    if node_name == self.name and has_filename and file_name:
+                        found = False
+                        for cs_key in self.cs.keys():
+                            if cs_key == parsed["Name"] or cs_key.endswith('/' + file_name) or cs_key == file_name:
+                                found = True
+                                break
+                        if not found:
+                            error_pkt = create_error_packet(parsed["SequenceNumber"], parsed["Name"], NO_DATA_ERROR, origin_node=origin_node)
+                            pit_ifaces = self.pit.get(parsed["Name"], [])
+                            if pit_ifaces:
+                                for iface_port in list(pit_ifaces):
+                                    self.sock.sendto(error_pkt, ("127.0.0.1", int(iface_port)))
+                                    self.log(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to PIT iface {iface_port}")
+                                    print(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to PIT iface {iface_port}")
+                                self.remove_pit(parsed["Name"])
+                            else:
+                                # fallback: send to requester if PIT is missing
+                                self.sock.sendto(error_pkt, addr)
+                                self.log(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to {addr} (no PIT entry)")
+                                print(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to {addr} (no PIT entry)")
+                            return
                 # else: fall through to existing buffering + NS query logic
 
                 # Buffer the real interest (so it can be forwarded to the next hop once known)
@@ -1649,6 +1749,7 @@ class Node:
                     # If anything fails, fall back to not installing a bad FIB entry.
                     self.log(f"[{self.name}] Failed to install FIB from ROUTE META: {e}")
                 return pkt_obj
+        
             else:
                 # If not for this node:
                 # 1) first try to forward the ROUTE reply back to any interface(s) that previously
@@ -1731,6 +1832,63 @@ class Node:
                                 except Exception as e:
                                     self.log(f"[{self.name}] Error forwarding ROUTE DATA to PIT port {port}: {e}")
                 return pkt_obj
+
+        elif packet_type == ERROR:
+            parsed = parse_error_packet(packet)
+            origin_name = parsed.get("OriginNode")
+            err_code = parsed.get("ErrorCode")
+            err_name = parsed.get("Name")
+            seq = parsed.get("SequenceNumber")
+            # Map error code to human message
+            if err_code == FORMAT_ERROR:
+                err_text = "Format Error"
+            elif err_code == NAME_ERROR:
+                err_text = "Name Error"
+            elif err_code == NO_DATA_ERROR:
+                err_text = "Data Not Found"
+            elif err_code == DROPPED_ERROR:
+                err_text = "Packet Dropped"
+            else:
+                err_text = f"Unknown Error 0x{err_code:02x}"
+
+            print(f"[{self.name}] Received ERROR ({err_text}) for '{err_name}' seq={seq} origin={origin_name} at {timestamp}")
+            self.log(f"[{self.name}] Received ERROR ({err_text}) for '{err_name}' seq={seq} origin={origin_name} at {timestamp}")
+
+            # Forwarding logic for NAME_ERROR: follow the same path as ROUTING_DATA
+            if err_code == NAME_ERROR:
+                # Try to forward back along the path if available
+                dest_name = parsed.get("Name")
+                pending_ifaces = self.ns_query_table.get(dest_name, [])
+                if pending_ifaces:
+                    for p in list(pending_ifaces):
+                        try:
+                            print(f"[{self.name}] Forwarded NAME_ERROR for {dest_name} to NS-query iface port {p}")
+                            self.log(f"[{self.name}] Forwarded NAME_ERROR for {dest_name} to NS-query iface port {p}")
+                            self.sock.sendto(packet, ("127.0.0.1", int(p)))
+                        except Exception as e:
+                            #print(f"[{self.name}] Error forwarding NAME_ERROR to NS-query iface {p}: {e}")
+                            self.log(f"[{self.name}] Error forwarding NAME_ERROR to NS-query iface {p}: {e}")
+                    # clear recorded pending query interfaces for this destination
+                    try:
+                        del self.ns_query_table[dest_name]
+                    except KeyError:
+                        pass
+            elif err_code == NO_DATA_ERROR:
+                error_pkt = create_error_packet(parsed["SequenceNumber"], parsed["Name"], NO_DATA_ERROR, origin_node=origin_name)
+                
+                if origin_name != self.name:
+                    pit_ifaces = self.pit.get(parsed["Name"], [])
+                    name = parsed["Name"]
+                    if pit_ifaces:
+                        for iface_port in list(pit_ifaces):
+                            self.sock.sendto(error_pkt, ("127.0.0.1", int(iface_port)))
+                            self.log(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
+                            print(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
+                        self.remove_pit(parsed["Name"])
+                    return
+                else:
+                    print(f"[{self.name}] RECEIVED ERROR: {err_name}")
+            return None
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
             self.log(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
