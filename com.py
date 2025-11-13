@@ -98,10 +98,10 @@ if __name__ == "__main__":
     time.sleep(5)
 
     # Interest Testing (Levenshtein Distance)
-    dpc1.send_interest(seq_num=0, name="/DLSU", target=("127.0.0.1", 5001), data_flag=False)
-    # dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
+    dpc1.send_interest(seq_num=0, name="/DLSU/nonexistent/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
     # dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
-    # acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
+    #acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
     # dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     # miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
     # goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     time.sleep(5)
 
     # fib tables
-    print("\n--- FIB Tables ---")
+    """ print("\n--- FIB Tables ---")
     print("henry FIB:", henry.fib)
     print("andrew FIB:", andrew.fib)
     print("dpc1 FIB:", dpc1.fib)
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     print("henry PIT:", henry.pit)
     print("miguel PIT: ", miguel.pit)
     print("dlsu PIT:", dlsu.pit)
-    print("goks PIT:", goks.pit)
+    print("goks PIT:", goks.pit) """
 
 # DEBUGGING MENU 
 class DebugController:

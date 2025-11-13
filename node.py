@@ -1062,7 +1062,6 @@ class Node:
                     parsed["Name"] = enc_name
                     packet = create_interest_packet(parsed["SequenceNumber"], enc_name, parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=False)
                     is_real_interest = False
-                   # continue processing below
                 else:
                     # Try to forward directly if we already know the border port (HELLO/FIB)
                     target_port = None
@@ -1233,7 +1232,7 @@ class Node:
                         print(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to {addr} (no PIT entry)")
                     self.log(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
                     print(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
-                    return
+                return
             # Otherwise do not forward directly here; let the normal NS-query path handle it.
 
             # If this is a query to the NameServer (data_flag == False)
@@ -1574,6 +1573,7 @@ class Node:
             self.log(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr} with parsed data: {parsed}")
             #print(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr} with parsed data: {parsed}")
             if parsed["Flags"] == 0x1:
+                # BAND-AID SOLUTION, prevent update flooding by adding cooldown
                 now = time.time()
                 cooldown = 10  # seconds
                 last_time = self.last_update_received.get(neighbor_name, 0)
@@ -1855,7 +1855,10 @@ class Node:
             self.log(f"[{self.name}] Received ERROR ({err_text}) for '{err_name}' seq={seq} origin={origin_name} at {timestamp}")
 
             # Forwarding logic for NAME_ERROR: follow the same path as ROUTING_DATA
-            if err_code == NAME_ERROR:
+            if err_code == FORMAT_ERROR:
+                print(f"[{self.name}] FORMAT_ERROR received for '{err_name}' seq={seq} at {timestamp}")
+                self.log(f"[{self.name}] FORMAT_ERROR received for '{err_name}' seq={seq} at {timestamp}")
+            elif err_code == NAME_ERROR:
                 # Try to forward back along the path if available
                 dest_name = parsed.get("Name")
                 pending_ifaces = self.ns_query_table.get(dest_name, [])
@@ -1873,21 +1876,29 @@ class Node:
                         del self.ns_query_table[dest_name]
                     except KeyError:
                         pass
-            elif err_code == NO_DATA_ERROR:
-                error_pkt = create_error_packet(parsed["SequenceNumber"], parsed["Name"], NO_DATA_ERROR, origin_node=origin_name)
+            elif err_code == NO_DATA_ERROR or err_code == DROPPED_ERROR:
+                #error_pkt = create_error_packet(parsed["SequenceNumber"], parsed["Name"], err_code, origin_node=origin_name)
                 
                 if origin_name != self.name:
                     pit_ifaces = self.pit.get(parsed["Name"], [])
                     name = parsed["Name"]
                     if pit_ifaces:
                         for iface_port in list(pit_ifaces):
-                            self.sock.sendto(error_pkt, ("127.0.0.1", int(iface_port)))
-                            self.log(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
-                            print(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
+                            self.sock.sendto(packet, ("127.0.0.1", int(iface_port)))
+
+                            if err_code == DROPPED_ERROR:
+                                self.log(f"[{self.name}] Forwarded ERROR (Packet Dropped) for '{name}' to PIT iface {iface_port}")
+                                print(f"[{self.name}] Forwarded ERROR (Packet Dropped) for '{name}' to PIT iface {iface_port}")
+                            elif err_code == NO_DATA_ERROR:
+                                self.log(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
+                                print(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
+                            else:
+                                self.log(f"[{self.name}] Forwarded ERROR for '{name}' to PIT iface {iface_port}")
+                                print(f"[{self.name}] Forwarded ERROR for '{name}' to PIT iface {iface_port}")
                         self.remove_pit(parsed["Name"])
                     return
                 else:
-                    print(f"[{self.name}] RECEIVED ERROR: {err_name}")
+                    print(f"[{self.name}] RECEIVED ERROR: {err_text} for '{err_name}' seq={seq} at {timestamp}")
             return None
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
