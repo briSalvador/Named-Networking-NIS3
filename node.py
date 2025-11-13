@@ -515,185 +515,135 @@ class Node:
 
     def _handle_route_data(self, packet, addr):
         """
-        Process an incoming ROUTING_DATA packet:
-        - If the ROUTE is for this node (origin_name == self.name) -> update FIB and forward buffered
-          'real' interest packets for that destination to the discovered next hop.
-        - Otherwise, forward the ROUTING_DATA to interfaces recorded in the PIT for the destination.
-        - Fallback: if no PIT entry, attempt direct send to origin_name's port (if known).
+        Robust ROUTE_DATA handling:
+         - Parse route payload and prefer forwarding toward origin via path_to_origin
+         - Install FIB entries if this node appears in the provided path (so future queries use FIB)
+         - Forward the raw ROUTE_DATA packet (unchanged) to the next hop's UDP port
+         - Provide detailed debug output when forwarding fails
         """
-        parsed = parse_route_data_packet(packet)
-        payload = parsed.get("Payload")
-        dest_name = parsed.get("Name")
-        origin_name = None
-        next_hop_name = None
+        try:
+            parsed = parse_route_data_packet(packet)
+        except Exception as e:
+            self.log(f"[{self.name}] _handle_route_data: parse error: {e}")
+            return
 
-        if isinstance(payload, dict):
-            origin_name = payload.get("origin_name") or payload.get("origin")
-            next_hop_name = payload.get("next_hop") or payload.get("nextHop") or payload.get("next")
-            dest_name = payload.get("destination") or dest_name
-        else:
-            text = payload if isinstance(payload, str) else ""
-            try:
-                parts = text.split()
-                for p in parts:
-                    if p.startswith("origin="):
-                        origin_name = p.split("=", 1)[1]
-                    if p.startswith("next_hop=") or p.startswith("nextHop="):
-                        next_hop_name = p.split("=", 1)[1]
-            except Exception:
-                pass
+        # canonical fields returned by parse_route_data_packet
+        origin_name = parsed.get("OriginName") or (parsed.get("RoutingInfoJson") or {}).get("origin_name") if isinstance(parsed.get("RoutingInfoJson"), dict) else None
+        path = parsed.get("Path") or []
+        path_to_origin = parsed.get("PathToOrigin") or []
+        dest = parsed.get("Dest") or parsed.get("Name")
+        next_hop_field = parsed.get("NextHop")
 
-        self.log(f"[{self.name}] Received ROUTE DATA from {addr} payload={payload}")
+        self.log(f"[{self.name}] Received ROUTE DATA from {addr} payload_origin={origin_name} dest={dest} path={path} path_to_origin={path_to_origin} next_hop={next_hop_field}")
 
-        # Ensure path is normalized to a list of node-names
-        path_field = parsed.get("Path", [])
-        if isinstance(path_field, str):
-            path = [p.strip() for p in path_field.split(",") if p.strip()]
-        elif isinstance(path_field, list):
-            path = path_field
-        else:
-            path = []
+        # If path is a string, normalize to list
+        if isinstance(path, str):
+            path = [p.strip() for p in path.split(",") if p.strip()]
+        if isinstance(path_to_origin, str):
+            path_to_origin = [p.strip() for p in path_to_origin.split(",") if p.strip()]
 
-        # If this node appears in the returned path, install a FIB entry pointing
-        # to the next hop in that path (toward the destination). This prevents
-        # installing FIBs that point back to the sender port and avoids ping-pong.
+        # If this node is included in the returned path, install a FIB entry pointing to the next hop in that path
         try:
             if path and self.name in path:
                 idx = path.index(self.name)
                 if idx < len(path) - 1:
-                    next_node_name = path[idx + 1]
-                    # Resolve port for next_node_name
-                    next_port = None
-                    if next_node_name in self.name_to_port:
-                        try:
-                            next_port = int(self.name_to_port[next_node_name])
-                        except Exception:
-                            next_port = None
-                    if next_port is None:
-                        fib_entry = self.fib.get(next_node_name)
-                        if fib_entry:
-                            try:
-                                next_port = int(fib_entry["NextHops"])
-                            except Exception:
-                                next_port = None
-                    if next_port:
-                        remaining_hops = len(path) - idx - 1
-                        # IMPORTANT: mark this FIB as coming from the NameServer so it
-                        # can be used for parent/fuzzy matching by other nodes.
-                        self.add_fib(dest_name, next_port, exp_time=5000, hop_count=remaining_hops, source="NS")
-                        self.log(f"[{self.name}] Installed FIB for {dest_name} -> next hop {next_node_name} (port {next_port}), remaining_hops={remaining_hops}")
+                    # next hop toward destination (from this node's perspective)
+                    next_toward_dest = path[idx + 1]
+                    port, resolved = self._resolve_port_by_name(next_toward_dest)
+                    if port:
+                        # install FIB so real interests will be forwarded correctly going to dest
+                        self.add_fib(dest, port, exp_time=60000, hop_count=len(path) - idx - 1, source="NS")
+                        self.log(f"[{self.name}] Installed FIB for {dest} -> next hop {next_toward_dest} (port {port})")
         except Exception as e:
             self.log(f"[{self.name}] Error installing FIB from ROUTE path: {e}")
 
-        # If this ROUTING_DATA is for this node (we were the origin of the original NS query)
+        # If this ROUTE_DATA is actually intended for this node (origin of the original query)
         if origin_name == self.name:
-            # Update FIB for the destination using the provided next_hop_name (if resolvable)
-            if next_hop_name:
-                next_port = self.name_to_port.get(next_hop_name)
-                if next_port:
-                    self.fib[dest_name] = {"NextHops": int(next_port)}
-                    self.log(f"[{self.name}] Updated FIB: {dest_name} -> {next_hop_name} (port {next_port})")
-                else:
-                    self.log(f"[{self.name}] ROUTE contains next_hop {next_hop_name} but no port known locally")
+            # Update FIB for the destination using provided next_hop_field if resolvable
+            if next_hop_field:
+                port, resolved = self._resolve_port_by_name(next_hop_field)
+                if port:
+                    self.add_fib(dest, port, exp_time=60000, hop_count=1, source="NS")
+                    self.log(f"[{self.name}] Installed self-origin FIB: {dest} -> {next_hop_field} (port {port})")
 
-            # Forward any buffered "real" interest packets for this destination to the discovered next hop
+            # Forward any buffered real interests for this destination
             forwarded = []
             with getattr(self, "buffer_lock", threading.Lock()):
-                if hasattr(self, "buffer"):
+                try:
                     for entry in list(self.buffer):
-                        if entry.get("destination") == dest_name:
-                            target_port = None
-                            # prefer explicit FIB entry we just set
-                            if dest_name in self.fib:
-                                target_port = int(self.fib[dest_name]["NextHops"])
-                            elif next_hop_name:
-                                target_port = self.name_to_port.get(next_hop_name)
-                            if target_port:
-                                try:
-                                    self.sock.sendto(entry["packet"], ("127.0.0.1", target_port))
-                                    forwarded.append(entry)
-                                    self.log(f"[{self.name}] Forwarded buffered real interest for {dest_name} to port {target_port}")
-                                except Exception as e:
-                                    self.log(f"[{self.name}] Error sending buffered interest to port {target_port}: {e}")
-            # remove forwarded entries from buffer
-            if forwarded:
-                with getattr(self, "buffer_lock", threading.Lock()):
-                    for e in forwarded:
                         try:
-                            self.buffer.remove(e)
-                        except ValueError:
-                            pass
-            return
-
-        # Not for this node: forward to PIT interfaces for the destination
-        pit_ifaces = self.pit.get(dest_name, [])
-        if pit_ifaces:
-            for iface_port in list(pit_ifaces):
-                try:
-                    self.sock.sendto(packet, ("127.0.0.1", int(iface_port)))
-                    self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to PIT iface port {iface_port}")
+                            parsed_interest = parse_interest_packet(entry["packet"])
+                        except Exception:
+                            continue
+                        if parsed_interest.get("Name") == dest:
+                            # decide forward using FIB entry
+                            nh = self.get_next_hops(dest)
+                            if nh:
+                                target_port = nh
+                                self.sock.sendto(entry["packet"], ("127.0.0.1", int(target_port)))
+                                forwarded.append(entry)
+                                self.buffer.remove(entry)
+                                self.log(f"[{self.name}] Forwarded buffered interest for {dest} to port {target_port}")
                 except Exception as e:
-                    self.log(f"[{self.name}] Error forwarding ROUTE DATA to PIT iface {iface_port}: {e}")
+                    self.log(f"[{self.name}] Error forwarding buffered interests: {e}")
             return
 
-        # No PIT entries — try to forward to the origin directly if we know its port
-        if origin_name:
-            origin_port = self.name_to_port.get(origin_name)
-            if origin_port:
+        # Otherwise: we must forward this ROUTE_DATA upstream toward the origin
+        next_hop_name = None
+        # Prefer path_to_origin given by NS (path from NS -> origin)
+        if path_to_origin:
+            try:
+                # find this node in the path_to_origin, then choose the next element toward the origin
+                if self.name in path_to_origin:
+                    idx = path_to_origin.index(self.name)
+                    if idx < len(path_to_origin) - 1:
+                        next_hop_name = path_to_origin[idx + 1]
+                else:
+                    # if node not present, but NS included itself and we are a neighbor, try to find best candidate
+                    # fallback: use first element after NS if that is a neighbor of this node
+                    if len(path_to_origin) > 1:
+                        fallback_candidate = path_to_origin[1]
+                        next_hop_name = fallback_candidate
+            except Exception:
+                next_hop_name = None
+
+        # If path_to_origin did not yield a next hop, try NextHop field
+        if not next_hop_name and next_hop_field:
+            next_hop_name = next_hop_field
+
+        # If still unknown, as final fallback, try to forward to origin_name directly
+        if not next_hop_name:
+            next_hop_name = origin_name
+
+        # Resolve port
+        if next_hop_name:
+            port, resolved_name = self._resolve_port_by_name(next_hop_name)
+            if port:
                 try:
-                    self.sock.sendto(packet, ("127.0.0.1", int(origin_port)))
-                    self.log(f"[{self.name}] No PIT for {dest_name}; forwarded ROUTE DATA directly to origin {origin_name} at port {origin_port}")
+                    # forward the raw ROUTE_DATA packet unchanged
+                    target = ("127.0.0.1", int(port))
+                    # avoid sending back to the NS that just sent it (loop)
+                    if addr[1] == port:
+                        self.log(f"[{self.name}] WARNING: next hop resolved to sender port {port}; dropping to avoid loop")
+                        self.dump_routing_state()
+                        return
+                    self.sock.sendto(packet, target)
+                    self.log(f"[{self.name}] Forwarded ROUTE (next_hop={next_hop_name}) to {target}")
                     return
                 except Exception as e:
-                    self.log(f"[{self.name}] Failed to forward ROUTE DATA to origin {origin_name}: {e}")
+                    self.log(f"[{self.name}] Error forwarding ROUTE to {next_hop_name} ({port}): {e}")
+                    self.dump_routing_state()
+                    return
+            else:
+                # couldn't resolve: heavy debug output to help root cause
+                self.log(f"[{self.name}] Cannot resolve port for next_hop_name='{next_hop_name}'. Dumping routing state:")
+                self.dump_routing_state()
+                return
 
-        # Nothing to do - drop and log
-        self.log(f"[{self.name}] DROPPED ROUTE DATA for {dest_name}: no PIT and unknown origin {origin_name}")
-
-        try:
-            parsed = parse_route_data_packet(packet)
-            # Basic route fields
-            dest = parsed.get("Dest")
-            next_hop = parsed.get("NextHop")
-            next_hop_port = parsed.get("NextHopPort")
-            self.log(f"ROUTE_RX from {addr} name={parsed.get('Name')} dest={dest} next_hop={next_hop} next_hop_port={next_hop_port}")
-
-            # Check resolvability: name_to_port maps node_name -> port
-            resolvable = False
-            reason = []
-            if next_hop_port is not None:
-                try:
-                    nhp_int = int(next_hop_port)
-                    if nhp_int in set(self.name_to_port.values()):
-                        resolvable = True
-                        reason.append("next_hop_port found in name_to_port.values()")
-                except Exception:
-                    reason.append("next_hop_port not int")
-            if next_hop:
-                if next_hop in self.name_to_port:
-                    resolvable = True
-                    reason.append("next_hop found in name_to_port keys")
-            self.log(f"ROUTE_DEBUG resolvable={resolvable} reason={reason} name_to_port_keys={list(self.name_to_port.keys())} name_to_port_values={list(self.name_to_port.values())[:10]}")
-
-            # Dump buffer destinations for comparison
-            try:
-                buf_snapshot = list(self.buffer)
-                self.log(f"BUFFER_SNAPSHOT count={len(buf_snapshot)}")
-                for i, entry in enumerate(buf_snapshot):
-                    # normalize possible keys
-                    entry_dest = entry.get("dest") or entry.get("Name") or entry.get("destination") or entry.get("Destination")
-                    entry_status = entry.get("status")
-                    entry_origin = entry.get("origin") or entry.get("OriginNode")
-                    self.log(f"BUFFER[{i}] dest={entry_dest} status={entry_status} origin={entry_origin}")
-                    # exact-match check against route dest
-                    if dest is not None and entry_dest == dest:
-                        self.log(f"BUFFER_MATCH found index={i} entry_dest==route_dest ({dest})")
-                        # (existing code should mark resolved / forward — ensure it uses exact match)
-                # continue normal handling...
-            except Exception as e:
-                self.log(f"BUFFER_DUMP_EXC: {e}")
-        except Exception as e:
-            self.log(f"_handle_route_data EXC: {e}")
+        # If we reach here nothing could be done
+        self.log(f"[{self.name}] DROPPED ROUTE DATA for {dest}: no next_hop determined")
+        self.dump_routing_state()
+        return
 
     def _listen_broadcast(self):
         while self.running:
@@ -1699,31 +1649,41 @@ class Node:
             dest_name = parsed.get("Name")
 
             # Alias-aware port resolution
-            def _resolve_port_by_name(name_str):
-                # exact mapping
-                p = self.name_to_port.get(name_str)
-                if p is not None:
-                    return int(p)
-                # aliases inside multi-name group
-                for alias in name_str.split():
-                    p = self.name_to_port.get(alias)
-                    if p is not None:
-                        return int(p)
-                # fallback via FIB entry keyed by name or alias
-                fib_entry = self.fib.get(name_str)
-                if fib_entry and fib_entry.get("NextHops") is not None:
-                    try:
-                        return int(fib_entry["NextHops"])
-                    except Exception:
-                        pass
-                for alias in name_str.split():
-                    fib_entry = self.fib.get(alias)
-                    if fib_entry and fib_entry.get("NextHops") is not None:
-                        try:
-                            return int(fib_entry["NextHops"])
-                        except Exception:
-                            pass
-                return None
+            def _resolve_port_by_name(self, name_str):
+                """
+                Resolve a node-name (may be space-separated aliases) to a known port.
+                Tries, in order:
+                - exact match in self.name_to_port
+                - any alias token in name_str found in name_to_port
+                - neighbor_table keys (exact or alias tokens)
+                - strip last level (parent) and try again
+                Returns (port:int or None, resolved_name:str or None)
+                """
+                if not name_str:
+                    return None, None
+                # exact
+                if name_str in self.name_to_port:
+                    return self.name_to_port[name_str], name_str
+                # token aliases in the string
+                for token in name_str.split():
+                    if token in self.name_to_port:
+                        return self.name_to_port[token], token
+                # neighbors table (may contain alias forms)
+                for nbr in list(self.neighbor_table.keys()):
+                    if nbr == name_str:
+                        return self.name_to_port.get(nbr), nbr
+                    for token in nbr.split():
+                        if token == name_str or token in name_str.split():
+                            return self.name_to_port.get(nbr), nbr
+                # try parent (strip last level)
+                if '/' in name_str:
+                    parent = '/' + '/'.join(name_str.strip('/').split('/')[:-1])
+                    if parent in self.name_to_port:
+                        return self.name_to_port[parent], parent
+                    for token in parent.split():
+                        if token in self.name_to_port:
+                            return self.name_to_port[token], token
+                return None, None
 
             # Only process if origin_name matches this node
             if origin_name == self.name:
