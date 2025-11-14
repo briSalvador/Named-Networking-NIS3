@@ -245,6 +245,9 @@ class NameServer:
         self.pending_interests = {}
         self.pending_ttl = 5.0  # seconds to suppress duplicate ENCAP forwarding
 
+        # Simple PIT at the NameServer: map base interest name -> list of requester UDP addrs
+        self.pit = defaultdict(list)
+
     def _periodic_update(self):
         while self.running:
             domain = self.get_domains_from_name()
@@ -517,6 +520,17 @@ class NameServer:
         if len(segments) > 1:
             return '/' + '/'.join(segments[:-1])
         return path
+    
+    def _strip_encap(self, name):
+        """If name is an ENCAP:<border>|<original>, return the original part; otherwise return name."""
+        try:
+            if isinstance(name, str) and name.startswith("ENCAP:"):
+                rest = name[6:]
+                if "|" in rest:
+                    return rest.split("|", 1)[1].strip()
+        except Exception:
+            pass
+        return name
 
     def _handle_interest(self, packet, addr):
         """
@@ -551,6 +565,13 @@ class NameServer:
 
         if enc_name:
             dest_name = enc_name
+
+        # Record a PIT entry at the NameServer for this interest (so we can reply later)
+        # Store by base (stripped of ENCAP) name
+        base_name = self._strip_encap(parsed.get("Name"))
+        # avoid duplicate identical addrs
+        if addr not in self.pit[base_name]:
+            self.pit[base_name].append(addr)
 
         print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name}")
 
@@ -631,7 +652,8 @@ class NameServer:
                 if path_to_border:
                     # search entire path (not only hops after src) for any known node/alias
                     port, resolved_name = None, None
-                    for hop in path_to_border:
+                    # Avoid selecting the source (src_name) itself — start from the next hop
+                    for hop in path_to_border[1:]:
                         if hop in self.name_to_port:
                             port, resolved_name = self.name_to_port[hop], hop
                             break
@@ -728,8 +750,11 @@ class NameServer:
 
         print(f"[NS {self.ns_name}] Received ROUTE_ACK for {dest_name} from {addr}")
 
-        # find pending by (name, any origin, matching seq if present)
+        # Try to find pending using the ack name; if ack contains ENCAP, try the stripped base too.
         found_key, pending = self._find_pending(dest_name, seq=seq_num)
+        if not pending:
+            stripped = self._strip_encap(dest_name)
+            found_key, pending = self._find_pending(stripped, seq=seq_num)
         if found_key:
             # remove it
             self.pending_interests.pop(found_key, None)
@@ -741,7 +766,8 @@ class NameServer:
 
         origin_node = pending["origin"]
         border_router = pending["border_router"]
-        original_target = dest_name
+        # original_target should be the base (no ENCAP)
+        original_target = self._strip_encap(dest_name)
 
         # Prefer sending directly to the recorded original requester address if available.
         recorded_addr = pending.get("addr")
@@ -811,6 +837,22 @@ class NameServer:
                 return
             except Exception as e:
                 print(f"[NS {self.ns_name}] Error sending ROUTE to recorded addr {recorded_addr}: {e}")
+
+        # NEW fallback: consult NameServer PIT entries for the base name and send the ROUTE_DATA to any recorded requesters
+        pit_addrs = list(self.pit.get(original_target, []))
+        if pit_addrs:
+            for a in pit_addrs:
+                try:
+                    self.sock.sendto(resp, a)
+                    print(f"[NS {self.ns_name}] Sent ROUTE_DATA to PIT recorded addr {a} for {original_target}")
+                except Exception as e:
+                    print(f"[NS {self.ns_name}] Failed sending ROUTE_DATA to PIT addr {a}: {e}")
+            # clear PIT entries for this name (one-time)
+            try:
+                del self.pit[original_target]
+            except KeyError:
+                pass
+            return
 
         # --- existing fallback behavior (unchanged) ---
         # Compute path from origin to border router (used by node to install FIB and forward toward border)

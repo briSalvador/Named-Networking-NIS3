@@ -98,7 +98,7 @@ if __name__ == "__main__":
     time.sleep(5)
 
     # Standard Test Case
-    # dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    # dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", ns.port), data_flag=False)
     # dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from cam1")
 
     # Test Case for /DLSU (used to check if name truncation is correct)
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     # miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
 
     # Test case for interdomain interests
-    dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", ns.port), data_flag=False)
     acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
 
     # Test Case if destination exists but file does not

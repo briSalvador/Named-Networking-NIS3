@@ -581,8 +581,15 @@ class Node:
             if next_hop_field:
                 port, resolved = self._resolve_port_by_name(next_hop_field)
                 if port:
-                    self.add_fib(dest, port, exp_time=60000, hop_count=1, source="NS")
-                    self.log(f"[{self.name}] Installed self-origin FIB: {dest} -> {next_hop_field} (port {port})")
+                    # Avoid sending to our own port (would loop back to ourselves)
+                    if int(port) == int(self.port):
+                        self.log(f"[{self.name}] Resolved next_hop_port == self.port ({port}); skipping send to avoid loop")
+                    else:
+                        try:
+                            self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                            self.log(f"[{self.name}] Forwarded ROUTE_DATA to next_hop {resolved} (port {port})")
+                        except Exception as e:
+                            self.log(f"[{self.name}] Failed forwarding ROUTE_DATA to {resolved}:{port} - {e}")
 
             # Forward any buffered real interests for this destination
             forwarded = []
@@ -638,20 +645,14 @@ class Node:
             port, resolved_name = self._resolve_port_by_name(next_hop_name)
             if port:
                 try:
-                    # forward the raw ROUTE_DATA packet unchanged
-                    target = ("127.0.0.1", int(port))
-                    # avoid sending back to the NS that just sent it (loop)
-                    if addr[1] == port:
-                        self.log(f"[{self.name}] WARNING: next hop resolved to sender port {port}; dropping to avoid loop")
-                        self.dump_routing_state()
-                        return
-                    self.sock.sendto(packet, target)
-                    self.log(f"[{self.name}] Forwarded ROUTE (next_hop={next_hop_name}) to {target}")
-                    return
+                    # Avoid sending to our own port (prevents self-loop)
+                    if int(port) == int(self.port):
+                        self.log(f"[{self.name}] Next hop resolved to own port ({port}); dropping forward to avoid loop")
+                    else:
+                        self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                        self.log(f"[{self.name}] Forwarded ROUTE_DATA to {resolved_name} (port {port})")
                 except Exception as e:
-                    self.log(f"[{self.name}] Error forwarding ROUTE to {next_hop_name} ({port}): {e}")
-                    self.dump_routing_state()
-                    return
+                    self.log(f"[{self.name}] Error forwarding ROUTE_DATA to {resolved_name}:{port} - {e}")
             else:
                 # couldn't resolve: heavy debug output to help root cause
                 self.log(f"[{self.name}] Cannot resolve port for next_hop_name='{next_hop_name}'. Dumping routing state:")
@@ -796,10 +797,40 @@ class Node:
 
     def send_interest(self, seq_num, name, flags=0x0, target=("127.0.0.1", 0), data_flag=True):
         pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=data_flag)
-        self.sock.sendto(pkt, target)
-        print(f"[{self.name}] Sent INTEREST packet to {target} (data_flag={data_flag})")
-        self.log(f"[{self.name}] Sent INTEREST packet to {target} (data_flag={data_flag})")
-        self.add_to_buffer(pkt, target, reason="Originated Interest")
+        # If the target looks like a NameServer port that we know, send to a first-hop neighbor instead.
+        resolved_target = target
+        try:
+            # find any known NameServer name that maps to the target port
+            ns_names = [n for n, p in self.name_to_port.items() if "NameServer" in n and int(p) == int(target[1])]
+            if ns_names:
+                # choose a first-hop neighbor (prefer neighbors recorded in neighbor_table and name_to_port)
+                first_hop_port = None
+                for nbr in self.neighbor_table.keys():
+                    p = self.name_to_port.get(nbr)
+                    if p and int(p) != int(target[1]):
+                        first_hop_port = int(p)
+                        first_hop_name = nbr
+                        break
+                # fallback: any known port that is not the NS port
+                if not first_hop_port:
+                    for n, p in self.name_to_port.items():
+                        if int(p) != int(target[1]):
+                            first_hop_port = int(p)
+                            first_hop_name = n
+                            break
+                if first_hop_port:
+                    resolved_target = (self.host, first_hop_port)
+                    print(f"[{self.name}] Redirecting INTEREST for NameServer {ns_names[0]} -> first-hop {first_hop_name} (port {first_hop_port})")
+                    self.log(f"[{self.name}] Redirected INTEREST target {target} -> first-hop {resolved_target}")
+        except Exception:
+            resolved_target = target
+
+        self.sock.sendto(pkt, resolved_target)
+        print(f"[{self.name}] Sent INTEREST packet to {resolved_target} (data_flag={data_flag})")
+        self.log(f"[{self.name}] Sent INTEREST packet to {resolved_target} (data_flag={data_flag})")
+        # Record the buffer entry using the actual hop we sent to (resolved_target)
+        # so later forwarding uses the same next-hop and does not re-query the NS.
+        self.add_to_buffer(pkt, resolved_target, reason="Originated Interest")
         return pkt
 
     def send_data(self, seq_num, name, payload, flags=0x0, target=("127.0.0.1", 0)):
@@ -924,6 +955,8 @@ class Node:
 
         if packet_type == INTEREST:
             parsed = parse_interest_packet(packet)
+            # preserve the raw name as parsed from the packet (use this for ns query bookkeeping)
+            raw_interest_name = parsed.get("Name")
             is_real_interest = parsed["DataFlag"]
             origin_node = parsed["OriginNode"]
 
@@ -963,8 +996,11 @@ class Node:
                             self.ns_query_table.setdefault(key, [])
                             exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
                             if not exists:
-                                self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
-                                self.log(f"[{self.name}] Recorded ENCAP origin iface {addr[1]} for {key} (ack_only=True)")
+                                # do not register NameServer ports as requester interfaces
+                                if not self._is_ns_port(addr[1]):
+                                    self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                                else:
+                                    self.log(f"[{self.name}] Ignored registering ack-only NS query for {key} from NS port {addr[1]}")
                     except Exception:
                         pass
                     
@@ -1233,21 +1269,58 @@ class Node:
 
             # If this is a query to the NameServer (data_flag == False)
             if not is_real_interest:
-                # If the packet originated here, we already added it to PIT above.
-                # Routers that receive data=False should NOT rewrite the origin; they should forward
-                # the same packet toward the domain NameServer.
-                # Record the incoming interface so we can forward the NS ROUTE reply back here.
-                # This fixes the case where an intermediate router (e.g. /DLSU/Henry) forwarded
-                # the query to the NameServer but didn't know how to route the NS reply back.
+                # --- Ensure an NS-query "PIT" is created for ENCAP and related name forms ---
+                # Record multiple keys so ROUTE_ACK (which may carry either the full ENCAP
+                # name or the inner original name) finds the correct incoming iface.
                 try:
-                    self.ns_query_table.setdefault(parsed["Name"], [])
-                    exists = any(item.get("port") == addr[1] for item in self.ns_query_table[parsed["Name"]])
-                    if not exists:
-                        self.ns_query_table[parsed["Name"]].append({"port": addr[1], "ack_only": False})
-                        self.log(f"[{self.name}] Recorded NS query origin iface {addr[1]} for {parsed['Name']} (ack_only=False)")
-                        #print(f"[{self.name}] Recorded NS query origin iface {addr[1]} for {parsed['Name']} (ack_only=False)")
+                    port = addr[1] if addr else None
+                    if port is not None:
+                        def _add_ns_query_key(k):
+                            if not k:
+                                return
+                            lst = self.ns_query_table.setdefault(k, [])
+                            if not any(item.get("port") == port for item in lst):
+                                if not self._is_ns_port(port):
+                                    lst.append({"port": port, "ack_only": bool(parsed.get("Flags", 0) & ACK_FLAG)})
+                                else:
+                                    self.log(f"[{self.name}] Ignored registering NS-query key {k} for NS port {port}")
+                                self.log(f"[{self.name}] ns_query_table[{k}] add iface {port}")
+                                print(f"[{self.name}] ns_query_table[{k}] add iface {port}")
+
+                        # add full key exactly as received
+                        _add_ns_query_key(raw_interest_name)
+
+                        # If ENCAP form, also index the inner name and border alias forms
+                        if isinstance(raw_interest_name, str) and raw_interest_name.startswith("ENCAP:"):
+                            try:
+                                rest = raw_interest_name[6:]
+                                border_alias, inner_name = rest.split("|", 1)
+                                border_alias = border_alias.strip()
+                                inner_name = inner_name.strip()
+                                _add_ns_query_key(inner_name)          # inner original name
+                                _add_ns_query_key(border_alias + "|" + inner_name)  # normalized encap fragment
+                            except Exception:
+                                pass
                 except Exception as e:
-                    self.log(f"[{self.name}] Error recording NS query iface: {e}")
+                    self.log(f"[{self.name}] Error recording NS-query PIT: {e}")
+
+                # --- Record NS-query PIT entry for ENCAP or regular NS queries ---
+                # When an ENCAP query traverses this node (or any NS-query arrives),
+                # record the incoming interface under the exact packet name so that
+                # future ROUTE_ACKs can be forwarded along the reverse path.
+                try:
+                    key = raw_interest_name  # exact packet name as received (preserves ENCAP wrapper)
+                    if key:
+                        self.ns_query_table.setdefault(key, [])
+                        # avoid duplicate same-port entries
+                        if not any(item.get("port") == addr[1] for item in self.ns_query_table[key]):
+                            if not self._is_ns_port(addr[1]):
+                                self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                            else:
+                                self.log(f"[{self.name}] Ignored registering NS-query PIT key {key} from NS port {addr[1]}")
+                except Exception as e:
+                    self.log(f"[{self.name}] Error recording NS-query PIT: {e}")
+
 
                 own_domain = self.domains[0] if self.domains else None
                 if own_domain:
@@ -1547,13 +1620,48 @@ class Node:
             if not parsed_ack:
                 self.log(f"[{self.name}] Failed to parse ROUTE_ACK from {addr}")
                 return
+            
+            # Use the full packet name (which may be ENCAP:<border>|<original>) as the lookup key
             dest_name = parsed_ack.get("Name")
             self.log(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
             print(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
 
             # Forward the ack toward all recorded NS-query interfaces (propagate ack upstream)
-            # TODO: When border router receives ROUTE ACK, forward the ACK to the NS of the requester node 
-            pending = self.ns_query_table.get(dest_name, [])
+            # Try exact lookup first, then tolerant matches (handles stripped vs full-encap keys).
+            pending = self.ns_query_table.get(dest_name)
+            matched_key = dest_name
+            if not pending:
+                # attempt inner-name and ENCAP-normalized matches
+                for k, v in list(self.ns_query_table.items()):
+                    if not isinstance(k, str):
+                        continue
+                    # direct exact match
+                    if k == dest_name:
+                        pending = v
+                        matched_key = k
+                        break
+                    # ENCAP key that ends with "|<dest>"
+                    if k.endswith("|" + dest_name):
+                        pending = v
+                        matched_key = k
+                        break
+                    # if dest is inner part of an ENCAP key
+                    if k.startswith("ENCAP:") and "|" in k:
+                        try:
+                            _, inner = k.split("|", 1)
+                            inner = inner.strip()
+                            if inner == dest_name:
+                                pending = v
+                                matched_key = k
+                                break
+                        except Exception:
+                            pass
+                    # substring fallback (defensive)
+                    if dest_name in k:
+                        pending = v
+                        matched_key = k
+                        break
+
             if pending:
                 for entry in list(pending):
                     try:
@@ -1563,29 +1671,32 @@ class Node:
                         print(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to iface port {p}")
                     except Exception as e:
                         self.log(f"[{self.name}] Error forwarding ROUTE_ACK to iface {entry}: {e}")
+                # remove the recorded PIT for this matched key so subsequent acks don't reuse stale mapping
                 try:
-                    del self.ns_query_table[dest_name]
+                    del self.ns_query_table[matched_key]
                 except KeyError:
                     pass
                 return
-            # NEW: If no pending recorded interfaces, forward to own NameServer by default
+
+            # NEW: If no pending recorded interfaces, forward to own NameServer by default (best-effort)
             own_domain = self.domains[0] if self.domains else None
             if own_domain:
                 ns_name = f"/{own_domain}/NameServer1"
                 ns_port = self.name_to_port.get(ns_name)
+                # try FIB fallback if name_to_port doesn't have exact mapping
                 if ns_port is None:
                     fib_entry = self.fib.get(ns_name)
                     if fib_entry:
                         ns_port = fib_entry.get("NextHops")
                 if ns_port:
                     try:
-                        # TODO: I think add add the forwarded ACK to ns_query_table?
                         self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
                         self.log(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to own NS {ns_name} at port {ns_port}")
                         print(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to own NS {ns_name} at port {ns_port}")
+                        return
                     except Exception as e:
                         self.log(f"[{self.name}] Error forwarding ROUTE_ACK to own NS: {e}")
-                        print(f"[{self.name}] Error forwarding ROUTE_ACK to own NS: {e}")
+
             # If no NS to forward to, drop as before
             self.log(f"[{self.name}] No pending NS-query interfaces or NS for ROUTE_ACK {dest_name}; dropping")
             return
@@ -1982,6 +2093,20 @@ class Node:
     
     def get_neighbors(self):
         return self.neighbor_table
+
+    def _is_ns_port(self, port):
+        """Return True if 'port' belongs to a known NameServer (avoid registering NS ports in ns_query_table)."""
+        try:
+            p = int(port)
+        except Exception:
+            return False
+        for nm, nm_port in list(self.name_to_port.items()):
+            try:
+                if "NameServer" in nm and int(nm_port) == p:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def remove_stale_neighbors(self, timeout=30):
         now = datetime.now()
