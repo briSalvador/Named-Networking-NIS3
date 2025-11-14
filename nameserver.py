@@ -162,6 +162,41 @@ def parse_update_packet(packet):
         print(f"[NS parse_neighbor_update_packet] Error parsing packet: {e}")
         return None
     
+def create_route_ack_packet(seq_num, name, flags=0x0, source_name="", hop_count=0):
+    """
+    Create a ROUTE_ACK packet.
+
+    Format:
+      | packet_type_flags (1B) | seq_num (1B) | info_size (1B) | name_length (1B) |
+      | name (variable) | source_name_length (1B) | source_name (variable) | hop_count (1B) |
+
+    - packet_type_flags = (ROUTE_ACK << 4) | (flags & 0xF)
+    - hop_count is 1 byte (0–255)
+    """
+    packet_type = ROUTE_ACK
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    seq_num = seq_num & 0xFF
+
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes) & 0xFF
+
+    source_name_bytes = source_name.encode("utf-8")
+    source_name_length = len(source_name_bytes) & 0xFF
+
+    # info_size counts total of source_name_length + 1 byte for hop_count
+    info_size = source_name_length + 1
+
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, info_size, name_length)
+    packet = (
+        header
+        + name_bytes
+        + struct.pack("!B", source_name_length)
+        + source_name_bytes
+        + struct.pack("!B", hop_count)
+    )
+    return packet
+
 def parse_route_ack_packet(packet):
     """Parse ROUTE_ACK packets sent by nodes confirming a border path."""
     if len(packet) < 4:
@@ -502,6 +537,21 @@ class NameServer:
             print(f"[NS {self.ns_name}] INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")
             src_name = "UNKNOWN"
 
+        enc_name = None
+        enc_border = None
+        if isinstance(parsed.get("Name"), str) and parsed["Name"].startswith("ENCAP:"):
+            try:
+                rest = parsed["Name"][6:]
+                enc_border, enc_name = rest.split("|", 1)
+                enc_border = enc_border.strip()
+                enc_name = enc_name.strip()
+            except Exception:
+                enc_border = None
+                enc_name = None
+
+        if enc_name:
+            dest_name = enc_name
+
         print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name}")
 
         original_name = dest_name
@@ -651,10 +701,21 @@ class NameServer:
             "dest": original_name,
             "next_hop": next_hop,
         }
-        resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
-
-        self.sock.sendto(resp, addr)
-        print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
+        if parsed["Flags"] == 0x1:
+            ack_pkt = create_route_ack_packet(
+                        seq_num=seq_num,
+                        name=parsed["Name"],
+                        flags=0x0,
+                        source_name=enc_border,
+                        hop_count=len(path)
+                    )
+            self.sock.sendto(ack_pkt, addr)
+            print(f"[NS {self.ns_name}] Sent ROUTE_ACK for ENCAP name='{enc_name}' "
+                f"(full='{parsed["Name"]}', hop_count={len(path)}) to {addr}")
+        else:
+            resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
+            self.sock.sendto(resp, addr)
+            print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
 
     def _handle_route_ack(self, packet, addr):
         parsed = parse_route_ack_packet(packet)
