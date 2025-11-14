@@ -97,35 +97,90 @@ if __name__ == "__main__":
 
     time.sleep(5)
 
-    # Standard Test Case
-    # dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/hello.txt", target=("127.0.0.1", ns.port), data_flag=False)
+    def _ns_for_origin(origin_node):
+        """Return the NameServer object for origin based on its top-level domain."""
+        try:
+            origin_top = origin_node.name.strip('/').split('/', 1)[0]
+        except Exception:
+            origin_top = "DLSU"
+        if origin_top == "DLSU":
+            return ns
+        if origin_top == "ADMU":
+            return admu_ns
+        if origin_top == "UP":
+            return up_ns
+        return ns
+
+    def send_interest_via_ns(origin_node, seq_num, name, data_flag=False):
+        """Send an Interest from origin_node toward the NameServer of its domain,
+        but actually send to the first-hop neighbor toward that NameServer.
+        """
+        ns_obj = _ns_for_origin(origin_node)
+        target = ("127.0.0.1", ns_obj.port)  # fallback: direct to NS
+        try:
+            path = ns_obj._shortest_path(origin_node.name, ns_obj.ns_name)
+            if path and len(path) > 1:
+                first_hop = path[1]
+                # prefer origin's own mapping, then NS mapping, then alias splits
+                port = None
+                if hasattr(origin_node, "name_to_port"):
+                    port = origin_node.name_to_port.get(first_hop)
+                if not port and hasattr(ns_obj, "name_to_port"):
+                    port = ns_obj.name_to_port.get(first_hop)
+                if not port:
+                    # try alias tokens
+                    for candidate in (first_hop.split() if isinstance(first_hop, str) else []):
+                        if hasattr(origin_node, "name_to_port") and candidate in origin_node.name_to_port:
+                            port = origin_node.name_to_port[candidate]
+                            break
+                        if hasattr(ns_obj, "name_to_port") and candidate in ns_obj.name_to_port:
+                            port = ns_obj.name_to_port[candidate]
+                            break
+                if port:
+                    target = ("127.0.0.1", int(port))
+        except Exception:
+            # any failure: fall back to direct NS port (already set)
+            pass
+
+        origin_node.send_interest(seq_num=seq_num, name=name, target=target, data_flag=data_flag)
+
+    # # Standard Test Case
+    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
     # dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from cam1")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test Case for /DLSU (used to check if name truncation is correct)
-    # dpc1.send_interest(seq_num=0, name="/DLSU/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
+    # # Test Case for /DLSU (used to check if name truncation is correct)
+    # interest_name = "/DLSU/hello.txt"
     # dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test Case if destination is adjacent to at least one router on the way to the NS
-    # dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/hello.txt", target=("127.0.0.1", 5001), data_flag=False)
-    # miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "This is hello")
+    # # Test Case if destination is adjacent to at least one router on the way to the NS
+    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
+    # miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from Miguel")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test case for interdomain interests
-    dpc1.send_interest(seq_num=0, name="/ADMU/Gonzaga/cam1/hello.txt", target=("127.0.0.1", ns.port), data_flag=False)
-    acam1.add_cs("/ADMU/Gonzaga/cam1/hello.txt", "Hello from acam!")
+    # # Test case for interdomain interests
+    interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
+    acam1.add_cs(interest_name, "Hello from acam!")
+    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test Case if destination exists but file does not
-    # goks.send_interest(seq_num=0, name="/DLSU/Miguel/cam1/nothing_here.txt", target=("127.0.0.1", 5004))
+    # # Test Case if destination exists but file does not
+    # interest_name = "/DLSU/Miguel/cam1/nothing_here.txt"
+    # send_interest_via_ns(goks, seq_num=0, name=interest_name, data_flag=False)
     
-    # Test case if destination does not have a filename
-    # dpc1.send_interest(seq_num=0, name="/DLSU/Miguel/cam1", target=("127.0.0.1", 5001), data_flag=False)
+    # # Test case if destination does not have a filename
+    # interest_name = "/DLSU/Miguel/cam1"
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test Case if within ADMU domain
-    # acam1.send_interest(seq_num=0, name="/ADMU/hello.txt", target=("127.0.0.1", 6003), data_flag=False)
+    # # Test Case if within ADMU domain
+    # interest_name = "/ADMU/hello.txt"
     # admu.add_cs("/ADMU/hello.txt", "Hello from ADMU!")
+    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test Case if within UP domain
-    # upc1.send_interest(seq_num=0, name="/UP/hello.txt", target=("127.0.0.1", 7004), data_flag=False)
+    # # Test Case if within UP domain
+    # interest_name = "/UP/hello.txt"
     # up.add_cs("/UP/hello.txt", "Hello from UP!")
+    # send_interest_via_ns(upc1, seq_num=0, name=interest_name, data_flag=False)
 
     time.sleep(5)
 

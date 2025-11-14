@@ -953,6 +953,14 @@ class Node:
         packet_type = (packet[0] >> 4) & 0xF
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
+        # convenience: is this packet arriving from a known NameServer port?
+        from_ns = False
+        try:
+            if addr is not None and self._is_ns_port(addr[1]):
+                from_ns = True
+        except Exception:
+            from_ns = False
+
         if packet_type == INTEREST:
             parsed = parse_interest_packet(packet)
             # preserve the raw name as parsed from the packet (use this for ns query bookkeeping)
@@ -991,12 +999,12 @@ class Node:
                     
                     # Record the ENCAP origin port for ack_only, so we can send ROUTE_ACK back when route is resolved
                     try:
+                        # Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
                         key = enc_name if enc_name else parsed.get("Name")
                         if key:
                             self.ns_query_table.setdefault(key, [])
                             exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
                             if not exists:
-                                # do not register NameServer ports as requester interfaces
                                 if not self._is_ns_port(addr[1]):
                                     self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
                                 else:
@@ -1055,8 +1063,11 @@ class Node:
                                                 self.ns_query_table.setdefault(key, [])
                                                 exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
                                                 if not exists:
-                                                    self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
-                                                    self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                                    if not self._is_ns_port(addr[1]):
+                                                        self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                                                        self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                                    else:
+                                                        self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
                                         except Exception:
                                             pass
                                 
@@ -1148,8 +1159,11 @@ class Node:
                                         self.ns_query_table.setdefault(key, [])
                                         exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
                                         if not exists:
-                                            self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
-                                            self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                            if not self._is_ns_port(addr[1]):
+                                                self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                                                self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                            else:
+                                                self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
                                 except Exception:
                                     pass
                                 
@@ -1269,6 +1283,14 @@ class Node:
 
             # If this is a query to the NameServer (data_flag == False)
             if not is_real_interest:
+                # Registering "ns_query_table" entries must NOT record NameServer ports.
+                # If this packet came from a NameServer port, skip creating requester-face entries.
+                if from_ns:
+                    self.log(f"[{self.name}] Ignoring ns_query_table registration for query '{raw_interest_name}' arriving from NS port {addr[1]}")
+                else:
+                    # existing code path will register ns_query_table entries — ensure it uses the guarded helper (below)
+                    pass
+
                 # --- Ensure an NS-query "PIT" is created for ENCAP and related name forms ---
                 # Record multiple keys so ROUTE_ACK (which may carry either the full ENCAP
                 # name or the inner original name) finds the correct incoming iface.
@@ -1282,10 +1304,10 @@ class Node:
                             if not any(item.get("port") == port for item in lst):
                                 if not self._is_ns_port(port):
                                     lst.append({"port": port, "ack_only": bool(parsed.get("Flags", 0) & ACK_FLAG)})
+                                    self.log(f"[{self.name}] ns_query_table[{k}] add iface {port}")
+                                    print(f"[{self.name}] ns_query_table[{k}] add iface {port}")
                                 else:
                                     self.log(f"[{self.name}] Ignored registering NS-query key {k} for NS port {port}")
-                                self.log(f"[{self.name}] ns_query_table[{k}] add iface {port}")
-                                print(f"[{self.name}] ns_query_table[{k}] add iface {port}")
 
                         # add full key exactly as received
                         _add_ns_query_key(raw_interest_name)
