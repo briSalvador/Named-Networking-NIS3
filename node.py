@@ -483,10 +483,11 @@ class Node:
             print(f"[{self.name}] Error loading neighbors from {filename}: {e}")
             self.log(f"[{self.name}] Error loading neighbors from {filename}: {e}")
 
-    def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999):
+    def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999, isborder=False):
         self.name = name
         self.domains = get_domains_from_name(name)
         self.host = host
+        self.isborder = isborder
         self.port = port if port != 0 else self._get_free_port()
         self.broadcast_port = broadcast_port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1454,37 +1455,129 @@ class Node:
                             already_asked_ns = entry.get("forwarded_to_ns", False)
                             break
                 if not already_asked_ns:
-                    # Always send to own domain's NameServer, regardless of interest's domain
+                    # -----------------------------------------------------------
+                    # If NOT a border router → use existing behavior
+                    # -----------------------------------------------------------
                     own_domain = self.domains[0] if self.domains else None
-                    if own_domain:
+                    if own_domain and not self.isborder:
                         ns_name = f"/{own_domain}/NameServer1"
-                        # try FIB entry for that domain's NameServer, or direct mapping if known
                         fib_entry = self.fib.get(ns_name)
-                        ns_port = None
-                        if fib_entry:
-                            ns_port = fib_entry["NextHops"]
-                        else:
-                            # fallback to known port from HELLOs/UPDATEs
-                            ns_port = self.name_to_port.get(ns_name)
+                        ns_port = fib_entry["NextHops"] if fib_entry else self.name_to_port.get(ns_name)
+
                         if ns_port:
                             try:
-                                # create a query packet (data=False) where this router is origin
-                                query_pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=self.name, data_flag=False)
+                                query_pkt = create_interest_packet(
+                                    parsed["SequenceNumber"], parsed["Name"], parsed["Flags"],
+                                    origin_node=self.name, data_flag=False
+                                )
                                 self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
-                                print(f"[{self.name}] Sent NS QUERY for {parsed['Name']} (origin={self.name}) -> {ns_name} via port {ns_port}")
-                                self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} (origin={self.name}) -> {ns_name} via port {ns_port}")
-                                # mark buffered entries as forwarded to NS (do NOT modify buffered packet origin)
+                                print(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
+                                self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
+                                # mark buffered
                                 with self.buffer_lock:
                                     for entry in self.buffer:
                                         if entry.get("destination") == parsed["Name"]:
                                             entry["forwarded_to_ns"] = True
                             except Exception as e:
-                                print(f"[{self.name}] Error forwarding INTEREST query to NS via port {ns_port}: {e}")
-                                self.log(f"[{self.name}] Error forwarding INTEREST query to NS via port {ns_port}: {e}")
+                                print(f"[{self.name}] Error forwarding INTEREST query to NS: {e}")
                         else:
-                            print(f"[{self.name}] No route to NameServer {ns_name} (no FIB entry or known port). Will keep buffered.")
-                            self.log(f"[{self.name}] No route to NameServer {ns_name} (no FIB entry or known port). Will keep buffered.")
-                return  # buffered unknown routes for real interest
+                            print(f"[{self.name}] No route to NameServer {ns_name}")
+                        return
+
+                    # -----------------------------------------------------------
+                    # Border router logic (self.isborder == True)
+                    # -----------------------------------------------------------
+                    if self.isborder:
+                        # Example: /DLSU/Router1 /ADMU/Router1
+                        # Determine target domain based on the Interest name
+                        interest_full = parsed["Name"].lstrip("/")
+                        parts = interest_full.split("/")
+                        target_domain = parts[0] if parts else None
+
+                        # Determine border router's two domains
+                        # e.g. ["DLSU", "ADMU"]
+                        border_domains = []
+                        for alias in self.name.split():
+                            alias = alias.strip("/")
+                            segs = alias.split("/")
+                            if segs and len(segs) > 1:
+                                border_domains.append(segs[0])
+
+                        border_domains = list(set(border_domains))
+                        # example: border_domains = ["DLSU", "ADMU"]
+
+                        # Last domain visited = domain of the node that sent packet to this router
+                        last_domain = None
+                        if parsed["OriginNode"] and "/" in parsed["OriginNode"]:
+                            last_domain = parsed["OriginNode"].split("/")[1]
+
+                        # -------------------------------------------------------
+                        # 1. If target domain has a known NS → send to that NS
+                        # -------------------------------------------------------
+                        if target_domain:
+                            target_ns = f"/{target_domain}/NameServer1"
+                            target_ns_port = self.name_to_port.get(target_ns)
+
+                            if target_ns_port:
+                                try:
+                                    pkt = create_interest_packet(
+                                        parsed["SequenceNumber"],
+                                        parsed["Name"],
+                                        parsed["Flags"],
+                                        origin_node=self.name,
+                                        data_flag=False
+                                    )
+                                    self.sock.sendto(pkt, ("127.0.0.1", int(target_ns_port)))
+                                    print(f"[{self.name}] BORDER NS QUERY → {target_ns} for {parsed['Name']}")
+                                    self.log(f"[{self.name}] BORDER NS QUERY → {target_ns} for {parsed['Name']}")
+                                    # mark buffered
+                                    with self.buffer_lock:
+                                        for entry in self.buffer:
+                                            if entry.get("destination") == parsed["Name"]:
+                                                entry["forwarded_to_ns"] = True
+                                except Exception as e:
+                                    print(f"[{self.name}] Border NS query failed: {e}")
+                                return
+
+                        # -------------------------------------------------------
+                        # 2. If no target domain match, send to the NS we HAVEN'T visited
+                        # -------------------------------------------------------
+                        alt_domain = None
+                        for dom in border_domains:
+                            if dom != last_domain:  # choose the domain not visited
+                                alt_domain = dom
+                                break
+
+                        if alt_domain:
+                            alt_ns = f"/{alt_domain}/NameServer1"
+                            alt_ns_port = self.name_to_port.get(alt_ns)
+                            if alt_ns_port:
+                                try:
+                                    pkt = create_interest_packet(
+                                        parsed["SequenceNumber"],
+                                        parsed["Name"],
+                                        parsed["Flags"],
+                                        origin_node=self.name,
+                                        data_flag=False
+                                    )
+                                    self.sock.sendto(pkt, ("127.0.0.1", int(alt_ns_port)))
+                                    print(f"[{self.name}] BORDER NS QUERY (fallback) → {alt_ns} for {parsed['Name']}")
+                                    self.log(f"[{self.name}] BORDER NS QUERY (fallback) → {alt_ns} for {parsed['Name']}")
+                                    # mark buffered
+                                    with self.buffer_lock:
+                                        for entry in self.buffer:
+                                            if entry.get("destination") == parsed["Name"]:
+                                                entry["forwarded_to_ns"] = True
+                                except Exception as e:
+                                    print(f"[{self.name}] Border NS fallback query failed: {e}")
+                                return
+
+                        # -------------------------------------------------------
+                        # 3. No NS found → keep buffered
+                        # -------------------------------------------------------
+                        print(f"[{self.name}] BORDER: No suitable NS found for {parsed['Name']}")
+                        self.log(f"[{self.name}] BORDER: No suitable NS found for {parsed['Name']}")
+                        return
 
             if table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
@@ -1901,6 +1994,7 @@ class Node:
                                     entry["status"] = "resolved"
                                     entry["timestamp_resolved"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
                                     self.log(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
+                                    print(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
                                     forwarded_local.append(entry)
                     except Exception as e:
                         print(f"[{self.name}] Error storing FIB from NS reply: {e}")

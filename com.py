@@ -33,12 +33,12 @@ if __name__ == "__main__":
     dlsu = Node("/DLSU", port=5005)
     miguel = Node("/DLSU/Miguel", port=5006)
     dcam1 = Node("/DLSU/Miguel/cam1", port=5007)
-    dxa = Node("/DLSU/Router1 /ADMU/Router1", port=5008)
+    dxa = Node("/DLSU/Router1 /ADMU/Router1", port=5008, isborder=True)
     gonzaga = Node("/ADMU/Gonzaga", port=6001)
     admu = Node("/ADMU", port=6002)
     acam1 = Node("/ADMU/Gonzaga/cam1", port=6003)
     kostka = Node("/ADMU/Kostka", port=6004)
-    axu = Node("/ADMU/Router2 /UP/Router1", port=6005)
+    axu = Node("/ADMU/Router2 /UP/Router1", port=6005, isborder=True)
     up = Node("/UP", port=7001)
     salcedo = Node("/UP/Salcedo", port=7002)
     lara = Node("/UP/Lara", port=7003)
@@ -159,9 +159,19 @@ if __name__ == "__main__":
     # miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from Miguel")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # # Test case for interdomain interests
-    interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
-    acam1.add_cs(interest_name, "Hello from acam!")
+    # Test case for DLSU -> ADMU interdomain interests
+    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
+    # acam1.add_cs(interest_name, "Hello from acam!")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test case for ADMU -> UP interdomain interests
+    # interest_name = "/UP/Salcedo/PC1/hello_bitch.txt"
+    # upc1.add_cs(interest_name, "Hello from bitch!")
+    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test case for DLSU -> UP interdomain interests
+    interest_name = "/UP/Salcedo/PC1/we_bout_to_die.txt"
+    upc1.add_cs(interest_name, "Boom panis")
     send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # # Test Case if destination exists but file does not

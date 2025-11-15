@@ -823,7 +823,7 @@ class NameServer:
                 try:
                     target = (self.host, int(hop_port))
                     self.sock.sendto(resp, target)
-                    print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={first_hop_border}) to {first_hop_origin}")
+                    print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={first_hop_border}) to {first_hop_origin} neighbor")
                     return
                 except Exception as e:
                     print(f"[NS {self.ns_name}] Error sending ROUTE to first-hop to {first_hop_origin} going towards origin: {e}")
