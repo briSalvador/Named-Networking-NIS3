@@ -576,8 +576,10 @@ class Node:
             self.log(f"[{self.name}] Error installing FIB from ROUTE path: {e}")
 
         # If this ROUTE_DATA is actually intended for this node (origin of the original query)
+        print(f"[{self.name}] Checking if ROUTE_DATA is for self: origin_name={origin_name}, self.name={self.name}")
         if origin_name == self.name:
             # Update FIB for the destination using provided next_hop_field if resolvable
+            print("[{self.name}] ROUTE_DATA is for self; processing")
             if next_hop_field:
                 port, resolved = self._resolve_port_by_name(next_hop_field)
                 if port:
@@ -2025,6 +2027,7 @@ class Node:
                                 try:
                                     self.sock.sendto(packet, ("127.0.0.1", p))
                                     self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
+                                    print(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
                                 except Exception as e:
                                     self.log(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {entry}: {e}")
                         except Exception as e:

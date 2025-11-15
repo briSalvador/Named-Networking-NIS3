@@ -768,6 +768,7 @@ class NameServer:
         border_router = pending["border_router"]
         # original_target should be the base (no ENCAP)
         original_target = self._strip_encap(dest_name)
+        print(f"[NS {self.ns_name}] Preparing ROUTE_DATA reply to {origin_node} for {original_target}, direct to border router: {pending['border_router']}")
 
         # Prefer sending directly to the recorded original requester address if available.
         recorded_addr = pending.get("addr")
@@ -777,15 +778,23 @@ class NameServer:
         path_to_origin = self._shortest_path(self.ns_name, origin_node) or []
         first_hop_border = path_from_origin[1] if len(path_from_origin) > 1 else border_router
         first_hop_origin = path_to_origin[1] if len(path_to_origin) > 1 else None
+        print(f"[NS {self.ns_name}] Computed path_from_origin: {path_from_origin}, path_to_origin: {path_to_origin}")
+
+        # route_payload = {
+        #     "origin_name": origin_node,
+        #     "path": path_from_origin,
+        #     "border_router": border_router,
+        #     "dest": original_target,
+        #     "next_hop": first_hop_border,
+        #     "path_to_origin": path_to_origin,
+        #     "note": "ACK confirmed path via border router"
+        # }
 
         route_payload = {
             "origin_name": origin_node,
             "path": path_from_origin,
-            "border_router": border_router,
             "dest": original_target,
             "next_hop": first_hop_border,
-            "path_to_origin": path_to_origin,
-            "note": "ACK confirmed path via border router"
         }
 
         resp = create_route_data_packet(
@@ -814,10 +823,10 @@ class NameServer:
                 try:
                     target = (self.host, int(hop_port))
                     self.sock.sendto(resp, target)
-                    print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={first_hop_origin}) to {target}")
+                    print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={first_hop_border}) to {first_hop_origin}")
                     return
                 except Exception as e:
-                    print(f"[NS {self.ns_name}] Error sending ROUTE to first-hop {first_hop_origin}: {e}")
+                    print(f"[NS {self.ns_name}] Error sending ROUTE to first-hop to {first_hop_origin} going towards origin: {e}")
 
         # Fallbacks: try name->port for the origin, then the recorded addr as last resort
         origin_port = self.name_to_port.get(origin_node)
