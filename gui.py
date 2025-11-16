@@ -4,9 +4,181 @@ from datetime import datetime
 import re
 import io
 import sys
+import tkinter.font as tkfont
+
 
 TS_FMT = "%Y-%m-%d %H:%M:%S.%f"
 
+HIGHLIGHT_RULES = [
+    # startup
+    ("node_started", r"Node started at"),
+
+    # hello
+    ("hello_sent", r"Sent HELLO to"),
+    ("hello_recv", r"Received HELLO from"),
+    ("hello_regular", r"Received REGULAR HELLO"),
+    ("hello_error", r"Error sending HELLO to"),
+    ("hello_no_domains", r"No domains found for UPDATE to NS\."),
+
+    # neighbor updates
+    ("neighbor_update_rx", r"Received NEIGHBOR UPDATE"),
+    ("neighbor_update_tx", r"Forwarded NEIGHBOR UPDATE"),
+    ("neighbor_update_buf", r"buffering NEIGHBOR UPDATE"),
+    ("neighbor_update_err", r"Error forwarding NEIGHBOR UPDATE"),
+    ("neighbor_no_domain_ns", r"No domain\(s\) found for forwarding neighbor update"),
+    ("neighbor_added", r"Added neighbor .* to neighbor_table"),
+    ("neighbor_exists", r"Neighbor .* already exists in neighbor_table"),
+    ("neighbor_removed_stale", r"Removed stale neighbor"),
+
+    # update / fib stuff
+    ("ns_update_rx", r"Received UPDATE from"),
+    ("ns_update_ignored", r"Ignored NS UPDATE"),
+    ("ns_update_tx", r"Sent (NS|topology) UPDATE"),
+    ("ns_update_route_missing", r"No FIB entry for NameServer|No FIB entry for domain NameServer"),
+    ("fib_updated", r"FIB updated:"),
+    ("fib_stored", r"Stored FIB entry for"),
+    ("fib_loop", r"FIB next-hop .* incoming iface|FIB loop detected"),
+
+    # interest
+    ("interest_recv", r"Received INTEREST"),
+    ("interest_pit_add", r"Added .* to PIT with interfaces"),
+    ("interest_pit_update", r"Updated PIT for"),
+    ("interest_forward_fib", r"Forwarding INTEREST for .* via FIB"),
+    ("interest_forward_direct", r"forwarding directly"),
+    ("interest_drop_direct", r"Dropped interest for .* as it's a direct neighbor without filename"),
+
+    # encap
+    ("encap_forward", r"Forwarded ENCAP packet"),
+    ("encap_ns_query", r"Sent NS QUERY for border"),
+    ("encap_no_ns", r"No NS to query for border"),
+
+    # ns queries
+    ("ns_query_sent", r"Sent NS QUERY for"),
+    ("ns_query_fw", r"Forwarded NS QUERY|FORWARDED QUERY ->"),
+    ("ns_query_err", r"Error forwarding NS query|Forward-to-NS failed|Forward-to-known-NS failed"),
+    ("ns_query_recorded", r"Recorded NS query origin iface"),
+
+    # cs / pit / data path
+    ("cs_hit", r"Data found in CS for"),
+    ("data_recv", r"Received DATA from"),
+    ("data_fragment", r"Received DATA fragment"),
+    ("data_reassembled", r"All fragments received\. Reassembled payload"),
+    ("data_forwarded_pit", r"Forwarded DATA to PIT interface|Forwarded reassembled DATA"),
+    ("pit_removed", r"Removed .* from PIT\."),
+    ("pit_removed_iface", r"Removed interface .* from PIT entry"),
+    ("pit_removed_empty", r"Removed .* from PIT \(no interfaces left\)"),
+
+    # route data
+    ("route_rx", r"Received ROUTE DATA from"),
+    ("route_dropped", r"DROPPED ROUTE DATA"),
+    ("route_rx2", r"ROUTE_RX from"),
+    ("route_debug", r"ROUTE_DEBUG"),
+    ("route_buf_snapshot", r"BUFFER_SNAPSHOT count="),
+    ("route_buf_entry", r"BUFFER\[\d+\] dest="),
+    ("route_buf_match", r"BUFFER_MATCH"),
+    ("route_reply_missing", r"Route reply missing dest/next_hop info"),
+    ("route_meta_err", r"Failed to install FIB from ROUTE META"),
+    ("route_ns_iface", r"Forwarded ROUTE DATA for .* to NS-query iface"),
+    ("route_prev_hop", r"Forwarded ROUTE DATA for .* to previous hop"),
+    ("route_direct_origin", r"[Ff]orwarded ROUTE DATA directly to origin"),
+    ("route_fallback_pit", r"Falling back to PIT forwarding for ROUTE DATA"),
+    ("route_mismatch", r"ROUTING_DATA origin_name mismatch"),
+
+    # buffer / queueing
+    ("buffer_add", r"Added packet to buffer"),
+    ("buffer_proc", r"BUFFER_PROC checking"),
+    ("buffer_sent", r"BUFFER_SENT dest="),
+    ("buffer_no_pkt", r"BUFFER_NO_PACKET"),
+    ("buffer_cannot_resolve", r"BUFFER_PROC cannot resolve next_hop"),
+    ("buffer_send_exc", r"BUFFER_SEND_EXC"),
+    ("buffer_entry_exc", r"BUFFER_ENTRY_PROC_EXC"),
+    ("buffer_dump_exc", r"BUFFER_DUMP_EXC"),
+    ("buffer_mark_resolved", r"Marked buffered entry for .* resolved -> next_hop"),
+    ("buffer_snapshot", r"BUFFER_SNAPSHOT count="),
+
+    # errors / unknown
+    ("listener_err", r"Listener error"),
+    ("hello_send_fail", r"HELLO send failed"),
+    ("route_handle_exc", r"_handle_route_data EXC"),
+    ("process_buffer_exc", r"_process_buffer_loop EXC"),
+    ("unknown_packet", r"Unknown packet type"),
+    # parse / update errors
+    ("ns_parse_neighbor_update_err", r"\[NS parse_neighbor_update_packet] Error parsing packet"),
+    ("neighbor_update_parse_err", r"\[parse_neighbor_update_packet] Error parsing packet"),
+    ("update_parse_err", r"\[parse_update_packet] Error parsing UPDATE packet"),
+
+    # FIB / route errors
+    ("fib_install_route_path_err", r"Error installing FIB from ROUTE path"),
+    ("fib_store_ns_err", r"Error storing FIB from NS reply"),
+
+    # buffered / route forwarding errors
+    ("buffer_send_err", r"Error sending buffered interest to port"),
+    ("route_pit_iface_err", r"Error forwarding ROUTE DATA to PIT iface"),
+    ("route_ns_iface_err", r"Error forwarding ROUTE DATA to NS-query iface"),
+    ("route_prev_hop_err", r"Error forwarding ROUTE DATA to previous hop"),
+    ("route_direct_origin_err", r"Failed direct forward to origin"),
+    ("route_pit_port_err", r"Error forwarding ROUTE DATA to PIT port"),
+
+    # NS / HELLO / ENCAP / NS-query errors
+    ("ns_update_send_err", r"Error sending UPDATE to NS"),
+    ("hello_handle_err", r"Error handling HELLO from"),
+    ("encap_forward_err", r"Error forwarding ENCAP to"),
+    ("ns_query_send_err", r"Error sending NS query for border|Error forwarding INTEREST query to NS via port|Error sending NS query for .* due to FIB loop"),
+
+    # parse NEIGHBOR UPDATE generic NS message
+    ("ns_parse_neighbor_err", r"\[NS parse_neighbor_update_packet] Error parsing packet"),
+
+    # listener stopped
+    ("broadcast_listener_stopped", r"Broadcast listener stopped"),
+
+
+    # ns topology
+    ("ns_topology_warn", r"WARNING: topology file"),
+    ("ns_topology_err", r"ERROR loading topology"),
+    ("ns_topology_saved", r"Topology updated and saved to"),
+    ("ns_topology_write_err", r"Error writing topology file"),
+
+    # ns hello / neighbors
+    ("ns_error_hello_send", r"Error sending HELLO packet to"),
+    ("ns_error_load_neighbors", r"Error loading neighbors from"),
+
+    # ns update
+    ("ns_failed_parse_update", r"Failed to parse UPDATE from"),
+    ("ns_update_missing", r"Ignored UPDATE missing node or neighbor data"),
+    ("ns_update_not_in_domain", r"Ignored UPDATE not in domain"),
+    ("ns_update_accept", r"UPDATE accepted:"),
+    ("ns_error_handle_update", r"Error handling UPDATE"),
+
+    # ns interest / routing
+    ("ns_interest_unknown", r"INTEREST from unknown"),
+    ("ns_interest_req", r"ROUTE REQ:"),
+    ("ns_encap_forward", r"ENCAP-FORWARDED INTEREST"),
+    ("ns_target_not_local", r"Target domain .* not local and no reachable border port found"),
+    ("ns_name_not_found", r"No path\. Sent DATA\(NameNotFound\)"),
+    ("ns_send_route", r"Sent ROUTE \(next_hop=|Sent ROUTE packet to"),
+    ("ns_err_forward_interest", r"Error forwarding INTEREST"),
+
+    # ???
+    ("route_next_hop_unknown", r"ROUTE contains next_hop .* but no port known locally"),
+    ("ns_route_missing", r"No route to NameServer .* Will keep buffered"),
+    ("route_no_pit_direct_origin", r"No PIT for .*; forwarded ROUTE DATA directly to origin"),
+    ("fib_installed", r"Installed FIB for"),
+    ("fib_updated2", r"Updated FIB:"),
+    ("ns_send_route_pkt", r"Sent ROUTE packet to"),
+    ("route_pit_iface", r"Forwarded ROUTE DATA for .* to PIT iface port"),
+    ("route_pit_port", r"Forwarded ROUTE DATA to PIT port"),
+    ("buffer_forwarded_real", r"Forwarded buffered real interest for"),
+    ("buffer_added_listener", r"Received packet from .* added to buffer"),
+    ("interest_sent", r"Sent INTEREST packet to"),
+    ("data_fragment_sent", r"Sent DATA fragment"),
+    ("data_sent", r"Sent DATA packet to"),
+
+
+
+
+    # ns listener error
+    ("ns_listener_err", r"\[NS .*] Listener error"),
+]
 
 def _get_node_name(n):
     return getattr(n, "name", getattr(n, "ns_name", "Unknown"))
@@ -104,6 +276,109 @@ class LogGUI:
         )
         self.log_text.pack(side="left", fill="both", expand=True)
         self.log_text.tag_configure("match", background="#fff2a8")
+
+        # font and colors for global logs
+        self.log_font = tkfont.nametofont("TkFixedFont")
+        self.log_bold_font = self.log_font.copy()
+        self.log_bold_font.configure(weight="bold")
+
+        self.log_text.tag_configure("neighbor_update", foreground="HotPink2")
+
+        # bold node names
+        self.log_text.tag_configure("node_name", font=self.log_bold_font)
+        
+
+        # startup / topology / ns-ish stuff
+        for tag in (
+            "node_started",
+            "hello_sent", "hello_recv", "hello_regular",
+            "neighbor_update_rx", "neighbor_update_tx",
+            "ns_update_rx", "ns_update_tx",
+            "ns_query_sent", "ns_query_fw",
+            "route_rx", "route_rx2",
+            # ns
+            "ns_topology_saved", "ns_topology_warn",
+            "ns_update_accept",
+            "ns_interest_req", "ns_encap_forward", "ns_send_route",
+        ):
+            self.log_text.tag_configure(tag, foreground="HotPink2")
+
+        # interest / data / cs / pit / successful path
+        for tag in (
+            "cs_hit",
+            "data_recv", "data_fragment", "data_reassembled",
+            "data_forwarded_pit", "interest_recv",
+            "pit_removed", "pit_removed_iface", "pit_removed_empty",
+            "interest_pit_add", "interest_pit_update",
+            "interest_forward_fib", "interest_forward_direct",
+            "encap_forward", "interest_sent", "data_fragment_sent", "data_sent",
+            # ns
+            "ns_encap_forward", "ns_send_route",
+        ):
+            self.log_text.tag_configure(tag, foreground="dark green")
+
+
+        # buffer / debug info
+        for tag in ("buffer_add", "buffer_proc", "buffer_sent",
+                    "buffer_no_pkt", "buffer_cannot_resolve",
+                    "buffer_mark_resolved",
+                    "buffer_snapshot", "route_debug", "route_buf_snapshot",
+                    "route_buf_entry", "route_buf_match",
+                    "buffer_forwarded_real", "ns_query_recorded", "buffer_added_listener",):
+            self.log_text.tag_configure(tag, foreground="purple")
+
+        # warnings
+        for tag in (
+            "fib_loop", "ns_update_route_missing",
+            "interest_drop_direct",
+            "route_dropped", "route_reply_missing",
+            "route_fallback_pit", "route_mismatch",
+            "ns_route_missing", "encap_no_ns", "hello_no_domains",
+            "neighbor_update_buf", "neighbor_no_domain_ns",
+            "route_next_hop_unknown", "route_no_pit_direct_origin",
+            # ns warnings
+            "ns_update_missing", "ns_update_not_in_domain",
+            "ns_target_not_local", "ns_name_not_found",
+            "ns_route_missing",
+        ):
+            self.log_text.tag_configure(tag, foreground="DarkGoldenrod3")
+
+
+        # errors / exceptions / failures
+        for tag in (
+            "hello_error", "hello_send_fail",
+            "ns_query_err", "neighbor_update_err",
+            "listener_err", "route_meta_err",
+            "route_handle_exc", "process_buffer_exc",
+            "buffer_entry_exc", "buffer_dump_exc",
+            "unknown_packet",
+            # ns errors
+            "ns_topology_err", "ns_topology_write_err",
+            "ns_error_hello_send", "ns_error_load_neighbors",
+            "ns_failed_parse_update", "ns_error_handle_update",
+            "ns_err_forward_interest", "ns_listener_err",
+            #additional
+            "ns_parse_neighbor_update_err", "neighbor_update_parse_err",
+            "update_parse_err", "fib_install_route_path_err",
+            "fib_store_ns_err", "buffer_send_err",
+            "route_pit_iface_err", "route_ns_iface_err",
+            "route_prev_hop_err", "route_direct_origin_err",
+            "route_pit_port_err", "ns_update_send_err",
+            "hello_handle_err", "encap_forward_err",
+            "ns_query_send_err", "broadcast_listener_stopped",
+        ):
+            self.log_text.tag_configure(tag, foreground="red")
+
+
+        # fib updates / routing info
+        for tag in ("fib_updated", "fib_stored",
+                    "route_ns_iface", "route_prev_hop",
+                    "route_direct_origin", "fib_installed", "fib_updated2",
+                    "ns_send_route_pkt",
+                    "route_pit_iface", "route_pit_port"):
+            self.log_text.tag_configure(tag, foreground="blue")
+
+        # -----------------------------------------------
 
         yscroll = ttk.Scrollbar(
             log_container, orient="vertical", command=self.log_text.yview
@@ -598,7 +873,6 @@ class LogGUI:
                     highlightbackground="#000000",
                 )
 
-    # refresh logs
     def _collect_logs(self):
         selected = self.selected_nodes
         logs = []
@@ -611,10 +885,17 @@ class LogGUI:
             entries = getattr(n, "logs", [])
             for e in entries:
                 ts = e.get("timestamp", "")
-                msg = e.get("message", "").strip()
-                if not msg:
+                raw_msg = e.get("message", "").strip()
+                if not raw_msg:
                     continue
-                logs.append((ts, f"[{nm}] {msg}"))
+
+                prefix = f"[{nm}]"
+                if raw_msg.startswith(prefix):
+                    line = raw_msg
+                else:
+                    line = f"{prefix} {raw_msg}"
+
+                logs.append((ts, line))
 
         # command logs
         logs.extend(self.command_entries)
@@ -622,6 +903,7 @@ class LogGUI:
         # sort by timestamp
         logs.sort(key=lambda t: _parse_ts(t[0]))
         return logs
+
 
     def _clear_logs_view(self):
         self.log_text.configure(state="normal")
@@ -640,7 +922,25 @@ class LogGUI:
                 self.log_text.insert(
                     "end", "------------------------------\n", ("divider",)
                 )
-            self.log_text.insert("end", f"[{ts}] {line}\n")
+
+            # no timestamp in global logs
+            start_index = self.log_text.index("end-1c linestart")
+            self.log_text.insert("end", line + "\n")
+            end_index = self.log_text.index("end-1c")
+
+            # colors
+            for tag_name, pattern in HIGHLIGHT_RULES:
+                for m in re.finditer(pattern, line):
+                    tag_start = f"{start_index}+{m.start()}c"
+                    tag_end   = f"{start_index}+{m.end()}c"
+                    self.log_text.tag_add(tag_name, tag_start, tag_end)
+
+            # bold node names
+            for m in re.finditer(r"\[[^\]]+\]", line):
+                tag_start = f"{start_index}+{m.start()}c"
+                tag_end   = f"{start_index}+{m.end()}c"
+                self.log_text.tag_add("node_name", tag_start, tag_end)
+
             last_was_cmd = line.startswith("[CMD]") or line.startswith("[CMD-OUT]")
 
         # highlight search
@@ -662,6 +962,7 @@ class LogGUI:
         # auto scroll
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+
 
     def _refresh_tick(self):
         if self.auto_refresh.get():
