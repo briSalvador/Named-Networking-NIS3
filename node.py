@@ -26,17 +26,41 @@ TRUNC_FLAG = 0x3
 
 FRAGMENT_SIZE = 1500
 
-def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False):
+def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False, visited_domains=None):
+    if visited_domains is None:
+        visited_domains = []
+
     packet_type = INTEREST
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
     seq_num = seq_num & 0xFF
     name_bytes = name.encode("utf-8")
     name_length = len(name_bytes)
+
     origin_bytes = origin_node.encode("utf-8")
     origin_length = len(origin_bytes)
+
     data_flag_byte = b'\x01' if data_flag else b'\x00'
+
+    # ---- Encode visited_domains ----
+    vd_count = len(visited_domains) & 0xFF
+    vd_bytes = bytes([vd_count])
+
+    for dom in visited_domains:
+        dom_b = dom.encode("utf-8")
+        vd_bytes += bytes([len(dom_b) & 0xFF]) + dom_b
+
+    # ---- Build packet ----
     header = struct.pack("!BBB", packet_type_flags, seq_num, name_length)
-    packet = header + name_bytes + struct.pack("!B", origin_length) + origin_bytes + data_flag_byte
+    packet = (
+        header +
+        name_bytes +
+        bytes([origin_length]) +
+        origin_bytes +
+        data_flag_byte +
+        vd_bytes
+    )
+
     return packet
 
 def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_fragments=1):
@@ -56,16 +80,35 @@ def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_
 
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
+
     name_start = 3
     name_end = name_start + name_length
     name = packet[name_start:name_end].decode("utf-8")
+
     origin_length = packet[name_end]
     origin_start = name_end + 1
     origin_end = origin_start + origin_length
     origin_node = packet[origin_start:origin_end].decode("utf-8")
+
     data_flag = bool(packet[origin_end])  # 1 byte after origin
+
+    # ---- Parse visited domains ----
+    vd_index = origin_end + 1
+    visited_count = packet[vd_index]
+    vd_index += 1
+
+    visited_domains = []
+    for _ in range(visited_count):
+        dom_len = packet[vd_index]
+        vd_index += 1
+        dom = packet[vd_index:vd_index + dom_len].decode("utf-8")
+        vd_index += dom_len
+        visited_domains.append(dom)
+
+    # Extract fields
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
+
     return {
         "PacketType": packet_type,
         "Flags": flags,
@@ -74,6 +117,7 @@ def parse_interest_packet(packet):
         "Name": name,
         "OriginNode": origin_node,
         "DataFlag": data_flag,
+        "VisitedDomains": visited_domains,
     }
 
 def parse_route_data_packet(packet):
@@ -235,65 +279,104 @@ def create_update_packet(name, origin_name, next_hop_port, number_of_hops):
     return header + name_bytes + update_info_bytes
 
 def parse_route_ack_packet(packet):
-    """
-    Parse a ROUTE_ACK packet created by create_route_ack_packet().
-    Returns:
-      {
-        "PacketType": <int>,
-        "Flags": <int>,
-        "SequenceNumber": <int>,
-        "Name": <str>,
-        "SourceName": <str>,
-        "HopCount": <int>
-      }
-    """
-    if len(packet) < 5:
-        raise ValueError("Invalid ROUTE_ACK packet: too short")
+    """Parse ROUTE_ACK packets sent by nodes confirming a border path."""
+    if len(packet) < 4:
+        return None
 
     packet_type_flags, seq_num, info_size, name_length = struct.unpack("!BBBB", packet[:4])
     name_start = 4
     name_end = name_start + name_length
-    if len(packet) < name_end + 2:
-        raise ValueError("Invalid ROUTE_ACK packet: missing fields after name")
-
+    if len(packet) < name_end:
+        return None
     name = packet[name_start:name_end].decode("utf-8")
 
-    source_name_length = packet[name_end]
-    source_name_start = name_end + 1
-    source_name_end = source_name_start + source_name_length
-    if len(packet) < source_name_end + 1:
-        raise ValueError("Invalid ROUTE_ACK packet: missing hop count")
+    idx = name_end
+    # source_name_length
+    if len(packet) < idx + 1:
+        return None
+    source_name_length = packet[idx]
+    idx += 1
+    if len(packet) < idx + source_name_length:
+        return None
+    source_name = packet[idx:idx + source_name_length].decode("utf-8")
+    idx += source_name_length
 
-    source_name = packet[source_name_start:source_name_end].decode("utf-8")
-    hop_count = packet[source_name_end]
+    # hop_count
+    if len(packet) < idx + 1:
+        return None
+    hop_count = packet[idx]
+    idx += 1
 
-    packet_type = (packet_type_flags >> 4) & 0xF
-    flags = packet_type_flags & 0xF
+    # visited domains
+    visited_domains = []
+    if len(packet) >= idx + 1:
+        vd_count = packet[idx]
+        idx += 1
+        for _ in range(vd_count):
+            if len(packet) < idx + 1:
+                break
+            dom_len = packet[idx]
+            idx += 1
+            if len(packet) < idx + dom_len:
+                break
+            dom = packet[idx:idx + dom_len].decode("utf-8")
+            idx += dom_len
+            visited_domains.append(dom)
 
     return {
-        "PacketType": packet_type,
-        "Flags": flags,
+        "PacketType": (packet_type_flags >> 4) & 0xF,
+        "Flags": packet_type_flags & 0xF,
         "SequenceNumber": seq_num,
+        "NameLength": name_length,
         "Name": name,
         "SourceName": source_name,
-        "HopCount": hop_count
+        "HopCount": hop_count,
+        "VisitedDomains": visited_domains,
     }
 
-def create_route_ack_packet(seq_num, name, flags=0x0):
+def create_route_ack_packet(seq_num, name, flags=0x0, source_name="", hop_count=0, visited_domains=[]):
     """
-    Create a ROUTE_ACK packet: minimal ROUTING-like packet which contains
-    only the name for which the ack is generated. No next-hop info included.
-    Format: !BBBB | name_bytes
-      packet_type_flags (1), seq_num (1), info_size (1: 0), name_length (1)
+    Create a ROUTE_ACK packet.
+
+    Format:
+      | packet_type_flags (1B) | seq_num (1B) | info_size (1B) | name_length (1B) |
+      | name (variable) | source_name_length (1B) | source_name (variable) | hop_count (1B) |
+
+    - packet_type_flags = (ROUTE_ACK << 4) | (flags & 0xF)
+    - hop_count is 1 byte (0–255)
     """
     packet_type = ROUTE_ACK
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
     seq_num = seq_num & 0xFF
+
     name_bytes = name.encode("utf-8")
     name_length = len(name_bytes) & 0xFF
-    info_size = 0  # no payload
+
+    source_name_bytes = source_name.encode("utf-8")
+    source_name_length = len(source_name_bytes) & 0xFF
+
+    # Build visited domains bytes: count (1B) followed by repeated (len(1B)+bytes)
+    vd_bytes = b""
+    for dom in visited_domains:
+        dom_b = dom.encode("utf-8")
+        vd_bytes += struct.pack("!B", len(dom_b) & 0xFF) + dom_b
+    vd_count = len(visited_domains) & 0xFF
+
+    # info_size counts: source_name_length + hop_count(1) + vd_count(1) + sum(each dom_len+1)
+    info_size = source_name_length + 1 + 1 + sum((len(d.encode("utf-8")) & 0xFF) + 1 for d in visited_domains)
+
     header = struct.pack("!BBBB", packet_type_flags, seq_num, info_size, name_length)
-    return header + name_bytes
+    packet = (
+        header
+        + name_bytes
+        + struct.pack("!B", source_name_length)
+        + source_name_bytes
+        + struct.pack("!B", hop_count)
+        + struct.pack("!B", vd_count)
+        + vd_bytes
+    )
+    return packet
 
 def create_ns_update_packet(name, origin_name, next_hop_port, number_of_hops):
     packet_type = UPDATE
@@ -980,17 +1063,30 @@ class Node:
             # Nodes must not send encapsulated queries to their own NameServer; instead
             # forward encapsulated packet toward the border alias. When the border node
             # itself receives the ENCAP packet it strips it and continues normal processing.
-            enc_name = None
+            enc_layers = []
             enc_border = None
-            if isinstance(parsed.get("Name"), str) and parsed["Name"].startswith("ENCAP:"):
+            enc_name = None
+
+            raw_name = parsed.get("Name", "")
+
+            if isinstance(raw_name, str) and raw_name.startswith("ENCAP:"):
                 try:
-                    rest = parsed["Name"][6:]
-                    enc_border, enc_name = rest.split("|", 1)
-                    enc_border = enc_border.strip()
-                    enc_name = enc_name.strip()
+                    # remove leading "ENCAP:" and split to layers
+                    parts = [p.strip() for p in raw_name[6:].split("|")]
+
+                    if len(parts) >= 2:
+                        enc_layers = parts[:-1]          # all except last
+                        enc_name = parts[-1]             # last = destination
+                        if len(parts) >= 2:
+                            enc_border = parts[-2]       # second to last = current border hop
                 except Exception:
+                    enc_layers = []
                     enc_border = None
                     enc_name = None
+
+            # If ENCAP exists, override dest_name
+            if enc_name:
+                dest_name = enc_name
 
             if enc_border:
                 # If this node is the border (one of its aliases), strip encapsulation and
@@ -1020,97 +1116,63 @@ class Node:
                     # and the encapsulated query came from another domain,
                     # forward the query to the NameServer of the *other* domain.
                     if " " in self.name:
-                        # Determine the two domain names
+                        # Border router with two domain identities
                         domain_parts = [d for d in self.name.split(" ") if d.strip()]
+
                         if len(domain_parts) >= 2:
                             left_domain = domain_parts[0].split("/")[1]
                             right_domain = domain_parts[1].split("/")[1]
 
-                            origin_domain = origin_node.split("/")[1] if "/" in origin_node else None
-                            target_domain = right_domain if origin_domain == left_domain else left_domain
+                            # Extract visited domains from the interest packet
+                            visited = set(parsed.get("VisitedDomains", []))
 
-                            # Build target NameServer name (e.g. /ADMU/NameServer1)
+                            # Determine which domain has NOT been visited
+                            unvisited_domains = []
+                            if left_domain not in visited:
+                                unvisited_domains.append(left_domain)
+                            if right_domain not in visited:
+                                unvisited_domains.append(right_domain)
+
+                            # -----------------------------
+                            # DECISION: which NS to contact?
+                            # -----------------------------
+                            if len(unvisited_domains) == 1:
+                                # Perfect case: exactly one unvisited domain → forward to that NS
+                                target_domain = unvisited_domains[0]
+
+                            elif len(unvisited_domains) == 2:
+                                # Neither visited yet → choose domain based on origin proximity
+                                origin_domain = origin_node.split("/")[1] if "/" in origin_node else None
+                                if origin_domain == left_domain:
+                                    target_domain = right_domain
+                                else:
+                                    target_domain = left_domain
+
+                            else:
+                                # Both domains fully visited → prevent loop
+                                print(f"[{self.name}] Both domains already visited ({visited}). Not querying any NS.")
+                                return
+
                             target_ns = f"/{target_domain}/NameServer1"
-
-                            # Try to forward directly if we already know the NameServer’s port
                             ns_port = self.name_to_port.get(target_ns)
+
+                            # ---------------------------------------------------------
+                            # 1) If we know the NS port already → forward INTERDOMAIN
+                            # ---------------------------------------------------------
                             if ns_port:
                                 try:
-                                    border_forward_packet = create_interest_packet(
+                                    forward_pkt = create_interest_packet(
                                         parsed["SequenceNumber"],
                                         parsed["Name"],
-                                        0x1,  # set INTERDOMAIN flag
-                                        origin_node=self.name,   # <-- update origin to the border router
-                                        data_flag=False
+                                        0x1,  # INTERDOMAIN flag
+                                        origin_node=self.name,
+                                        data_flag=False,
+                                        visited_domains=list(visited)  # <-- keep visited domains
                                     )
-                                    self.sock.sendto(border_forward_packet, ("127.0.0.1", int(ns_port)))
-                                    self.log(f"[{self.name}] Border router forwarded INTERDOMAIN QUERY for {parsed["Name"]} to {target_ns} (port {ns_port}) with new origin={self.name}")
-                                    print(f"[{self.name}] Border router forwarded INTERDOMAIN QUERY for {parsed["Name"]} to {target_ns} (port {ns_port})")
-                                    return
-                                except Exception as e:
-                                    self.log(f"[{self.name}] Failed forwarding interdomain query to {target_ns}: {e}")
-                            else:
-                                # If we don’t yet know the NameServer’s port, ask our own NS for it
-                                own_domain = left_domain if origin_domain == left_domain else right_domain
-                                own_ns = f"/{own_domain}/NameServer1"
-                                ns_port = self.name_to_port.get(own_ns)
-                                if ns_port:
-                                    try:
-                                        query_pkt = create_interest_packet(parsed["SequenceNumber"], target_ns, parsed["Flags"], origin_node=self.name, data_flag=False)
-                                        self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
-                                        self.log(f"[{self.name}] Border router asked local NS {own_ns} for port of {target_ns}")
-                                        
-                                        try:
-                                            key = enc_border
-                                            if key:
-                                                self.ns_query_table.setdefault(key, [])
-                                                exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
-                                                if not exists:
-                                                    if not self._is_ns_port(addr[1]):
-                                                        self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
-                                                        self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
-                                                    else:
-                                                        self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
-                                        except Exception:
-                                            pass
-                                
-                                    except Exception as e:
-                                        self.log(f"[{self.name}] Failed to query own NS for target NS route: {e}")
-                            return
-                else:
-                    # Try to forward directly if we already know the border port (HELLO/FIB)
-                    target_port = None
-                    if enc_border in self.name_to_port:
-                        target_port = int(self.name_to_port[enc_border])
-                    else:
-                        fib_entry = self.fib.get(enc_border)
-                        if fib_entry:
-                            try:
-                                target_port = int(fib_entry["NextHops"])
-                            except Exception:
-                                target_port = None
-                    if target_port:
-                        try:
-                            if parsed["Flags"] != 0x1:
-                                self.sock.sendto(packet, ("127.0.0.1", target_port))
-                                self.log(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
-                                print(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
-                                #self.ns_query_table[parsed["Name"]].append({"port": addr[1], "ack_only": False})
-                                return
-                        except Exception as e:
-                            self.log(f"[{self.name}] Error forwarding ENCAP to {enc_border}:{target_port} - {e}")
+                                    self.sock.sendto(forward_pkt, ("127.0.0.1", int(ns_port)))
 
-                    if parsed["Flags"] == 0x1:
-                        own_domain = self.domains[0] if self.domains else None
-                        if own_domain:
-                            ns_name = f"/{own_domain}/NameServer1"
-                            ns_port = self.name_to_port.get(ns_name)
-                            if ns_port:
-                                try:
-                                    self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
-                                    self.log(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
-                                    print(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
-
+                                    print(f"[{self.name}] Forwarded interdomain interest for {parsed['Name']} → {target_ns} (port {ns_port})")
+                                    
                                     try:
                                         full_key = parsed.get("Name")
                                         if full_key:
@@ -1124,67 +1186,151 @@ class Node:
                                     except Exception as e:
                                         self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
 
-                                    return
+                                    self.log(f"[{self.name}] Forwarded interdomain interest → {target_ns} with visited={visited}")
+
                                 except Exception as e:
-                                    self.log(f"[{self.name}] Error routing INTEREST with 0x1 flag to local NameServer {ns_name}:{ns_port} - {e}")
-                        # If no local NameServer info, buffer the packet
-                        self.add_to_buffer(packet, addr, reason="No local NameServer info for INTEREST with 0x1 flag")
-                        return
-                    
-                    # No direct route: ask our NameServer for the border alias, and buffer the ENCAP packet.
-                    # Determine local domain NameServer
+                                    print(f"[{self.name}] Failed forwarding to {target_ns}: {e}")
+                                    self.log(f"[{self.name}] Failed forwarding to {target_ns}: {e}")
+
+                                return
+
+                            # ---------------------------------------------------------
+                            # 2) If we do NOT know the NS port → ask our own NS
+                            # ---------------------------------------------------------
+                            # Which domain is "ours"? The domain that matches origin
+                            origin_domain = origin_node.split("/")[1] if "/" in origin_node else None
+                            own_domain = left_domain if origin_domain == left_domain else right_domain
+                            own_ns = f"/{own_domain}/NameServer1"
+
+                            own_ns_port = self.name_to_port.get(own_ns)
+                            if own_ns_port:
+                                try:
+                                    # Ask our own NS for the route to the target NS
+                                    query_pkt = create_interest_packet(
+                                        parsed["SequenceNumber"],
+                                        target_ns,
+                                        parsed["Flags"],
+                                        origin_node=self.name,
+                                        data_flag=False,
+                                        visited_domains=list(visited)
+                                    )
+
+                                    self.sock.sendto(query_pkt, ("127.0.0.1", int(own_ns_port)))
+                                    print(f"[{self.name}] Asked own NS {own_ns} for location of {target_ns}")
+                                    self.log(f"[{self.name}] Asked own NS {own_ns} for target NS {target_ns}")
+
+                                except Exception as e:
+                                    print(f"[{self.name}] ERROR asking own NS {own_ns} for route to {target_ns}: {e}")
+                                    self.log(f"[{self.name}] ERROR asking own NS {own_ns}: {e}")
+                            return
+                        
+                # Try to forward directly if we already know the border port (HELLO/FIB)
+                target_port = None
+                if enc_border in self.name_to_port:
+                    target_port = int(self.name_to_port[enc_border])
+                else:
+                    fib_entry = self.fib.get(enc_border)
+                    if fib_entry:
+                        try:
+                            target_port = int(fib_entry["NextHops"])
+                        except Exception:
+                            target_port = None
+                if target_port:
+                    try:
+                        if parsed["Flags"] != 0x1:
+                            self.sock.sendto(packet, ("127.0.0.1", target_port))
+                            self.log(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
+                            print(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
+                            #self.ns_query_table[parsed["Name"]].append({"port": addr[1], "ack_only": False})
+                            return
+                    except Exception as e:
+                        self.log(f"[{self.name}] Error forwarding ENCAP to {enc_border}:{target_port} - {e}")
+
+                if parsed["Flags"] == 0x1:
                     own_domain = self.domains[0] if self.domains else None
                     if own_domain:
                         ns_name = f"/{own_domain}/NameServer1"
-                        ns_port = None
-                        fib_entry = self.fib.get(ns_name)
-                        if fib_entry:
-                            ns_port = fib_entry["NextHops"]
-                        else:
-                            ns_port = self.name_to_port.get(ns_name)
-
-                        # Buffer the encapsulated packet so it can be forwarded when route known
-                        self.add_to_buffer(packet, addr, reason=f"No route to border {enc_border} for ENCAP query (will ask NS)")
-
+                        ns_port = self.name_to_port.get(ns_name)
                         if ns_port:
-                            # Send a separate query to local NameServer asking for the border alias
                             try:
-                                # Query name = enc_border (we want NS to resolve that node)
-                                query_pkt = create_interest_packet(parsed["SequenceNumber"], enc_border, parsed["Flags"], origin_node=self.name, data_flag=False)
-                                self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
-                                self.log(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
-                                print(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
-                        
+                                self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
+                                self.log(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
+                                print(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
+
                                 try:
-                                    # CHANGED: Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
-                                    key = enc_name if enc_name else parsed.get("Name")
-                                    if key:
-                                        self.ns_query_table.setdefault(key, [])
-                                        exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
+                                    full_key = parsed.get("Name")
+                                    if full_key:
+                                        self.ns_query_table.setdefault(full_key, [])
+                                        exists = any(item.get("port") == addr[1] for item in self.ns_query_table[full_key])
                                         if not exists:
-                                            if not self._is_ns_port(addr[1]):
-                                                self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
-                                                self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
-                                            else:
-                                                self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
-                                except Exception:
-                                    pass
-                                
-                                # mark buffered entries as having been forwarded to NS so we don't duplicate
-                                with self.buffer_lock:
-                                    if self.buffer:
-                                        # mark newest matching buffer entries
-                                        for entry in reversed(self.buffer):
-                                            if entry.get("destination") == parsed.get("Name") or entry.get("destination") == enc_name:
-                                                entry["forwarded_to_ns"] = True
-                                                break
+                                            self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
+                                            self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                            print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                            print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
+                                except Exception as e:
+                                    self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
+
+                                return
                             except Exception as e:
-                                self.log(f"[{self.name}] Error sending NS query for border {enc_border} to {ns_name}:{ns_port} - {e}")
-                                # leave packet buffered and return
-                        return
-                    # No NS info: buffer and wait (as fallback)
-                    self.add_to_buffer(packet, addr, reason=f"No NS to query for border {enc_border} for ENCAP query")
+                                self.log(f"[{self.name}] Error routing INTEREST with 0x1 flag to local NameServer {ns_name}:{ns_port} - {e}")
+                    # If no local NameServer info, buffer the packet
+                    self.add_to_buffer(packet, addr, reason="No local NameServer info for INTEREST with 0x1 flag")
                     return
+                
+                # No direct route: ask our NameServer for the border alias, and buffer the ENCAP packet.
+                # Determine local domain NameServer
+                own_domain = self.domains[0] if self.domains else None
+                if own_domain:
+                    ns_name = f"/{own_domain}/NameServer1"
+                    ns_port = None
+                    fib_entry = self.fib.get(ns_name)
+                    if fib_entry:
+                        ns_port = fib_entry["NextHops"]
+                    else:
+                        ns_port = self.name_to_port.get(ns_name)
+
+                    # Buffer the encapsulated packet so it can be forwarded when route known
+                    self.add_to_buffer(packet, addr, reason=f"No route to border {enc_border} for ENCAP query (will ask NS)")
+
+                    if ns_port:
+                        # Send a separate query to local NameServer asking for the border alias
+                        try:
+                            # Query name = enc_border (we want NS to resolve that node)
+                            query_pkt = create_interest_packet(parsed["SequenceNumber"], enc_border, parsed["Flags"], origin_node=self.name, data_flag=False)
+                            self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
+                            self.log(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                            print(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                    
+                            try:
+                                # CHANGED: Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
+                                key = enc_name if enc_name else parsed.get("Name")
+                                if key:
+                                    self.ns_query_table.setdefault(key, [])
+                                    exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
+                                    if not exists:
+                                        if not self._is_ns_port(addr[1]):
+                                            self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                                            self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                        else:
+                                            self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
+                            except Exception:
+                                pass
+                            
+                            # mark buffered entries as having been forwarded to NS so we don't duplicate
+                            with self.buffer_lock:
+                                if self.buffer:
+                                    # mark newest matching buffer entries
+                                    for entry in reversed(self.buffer):
+                                        if entry.get("destination") == parsed.get("Name") or entry.get("destination") == enc_name:
+                                            entry["forwarded_to_ns"] = True
+                                            break
+                        except Exception as e:
+                            self.log(f"[{self.name}] Error sending NS query for border {enc_border} to {ns_name}:{ns_port} - {e}")
+                            # leave packet buffered and return
+                    return
+                # No NS info: buffer and wait (as fallback)
+                self.add_to_buffer(packet, addr, reason=f"No NS to query for border {enc_border} for ENCAP query")
+                return
 
             pkt_obj = InterestPacket(
                 seq_num=parsed["SequenceNumber"],
@@ -1778,7 +1924,6 @@ class Node:
                         pending = v
                         matched_key = k
                         break
-
             if pending:
                 for entry in list(pending):
                     try:
@@ -2009,8 +2154,8 @@ class Node:
                 if ack_only_ports:
                     for port in list(set(ack_only_ports)):  # Deduplicate ports
                         try:
-                            ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
-                            self.sock.sendto(ack_pkt, ("127.0.0.1", int(port)))
+                            #ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
+                            self.sock.sendto(packet, ("127.0.0.1", int(port)))
                             self.log(f"[{self.name}] Sent ROUTE_ACK for {dest_name} to ENCAP origin port {port} (ack_only)")
                         except Exception as e:
                             self.log(f"[{self.name}] Error sending ROUTE_ACK to ENCAP origin port {port}: {e}")

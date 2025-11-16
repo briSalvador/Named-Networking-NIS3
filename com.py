@@ -196,12 +196,13 @@ if __name__ == "__main__":
 
     # fib tables
     print("\n--- FIB Tables ---")
-    print("henry FIB:", henry.fib)
-    print("andrew FIB:", andrew.fib)
-    print("dpc1 FIB:", dpc1.fib)
-    print("dlsu FIB:", dlsu.fib)
-    print("border router FIB: ", dxa.fib)
-    print("Gonzaga FIB: ", gonzaga.fib)
+    print("admu FIB: ", admu.fib)
+    # print("henry FIB:", henry.fib)
+    # print("andrew FIB:", andrew.fib)
+    # print("dpc1 FIB:", dpc1.fib)
+    # print("dlsu FIB:", dlsu.fib)
+    # print("border router FIB: ", dxa.fib)
+    # print("Gonzaga FIB: ", gonzaga.fib)
 
     print("\n--- PIT Tables ---")
     print("henry PIT:", henry.pit)
