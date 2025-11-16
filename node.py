@@ -3,12 +3,22 @@ import threading
 import struct
 import time
 import json
+import builtins
 from DataPacket import DataPacket
 from RouteDataPacket import RouteDataPacket
 from InterestPacket import InterestPacket
-from Packet import Packet
 from datetime import datetime
 from collections import deque
+
+_print_lock = threading.Lock()
+_original_print = builtins.print
+def _thread_safe_print(*args, **kwargs):
+    # always flush so ordering is visible immediately
+    kwargs.setdefault("flush", True)
+    with _print_lock:
+        _original_print(*args, **kwargs)
+# Replace built-in print for this process so all prints are serialized
+builtins.print = _thread_safe_print
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -791,12 +801,14 @@ class Node:
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(4096)
+                # Log arrival first (so arrival line appears before any processing output),
+                # then hand off to the processing pipeline.
+                print(f"[{self.name}] Received packet from {addr}")
                 # Directly hand off to the processing pipeline
                 self.receive_packet(data, addr)
                 # If you want to enqueue first, uncomment below and move receive out to the buffer loop:
                 # with self.buffer_lock:
-                #     self.buffer.append({"packet": data, "addr": addr, "destination": None, "status": "waiting"})
-                print(f"[{self.name}] Received packet from {addr}")
+                # self.buffer.append({"packet": data, "addr": addr, "destination": None, "status": "waiting"})
             except Exception as e:
                 print(f"[{self.name}] Listener error: {e}")
                 break
@@ -882,42 +894,124 @@ class Node:
                 self.log(f"_process_buffer_loop EXC: {e}")
 
     def send_interest(self, seq_num, name, flags=0x0, target=("127.0.0.1", 0), data_flag=True):
-        pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=data_flag)
-        # If the target looks like a NameServer port that we know, send to a first-hop neighbor instead.
+        # Originating-interest behavior:
+        # 1) If this node already has a FIB entry for the requested name, create a REAL_INTEREST
+        #    (data_flag=True) and forward it directly to the FIB next hop.
+        # 2) Otherwise, create an NS QUERY (data_flag=False) and send it toward the NameServer
+        #    (preferably via a first-hop neighbor). In that case buffer the original interest so
+        #    it can be converted to a real interest once a route is returned.
+
+        # Useful debug: show intent
+        print(f"[{self.name}] Initiating Interest for '{name}' (seq={seq_num}) origin={self.name}")
+        self.log(f"Initiating Interest for '{name}' (seq={seq_num}) origin={self.name}")
+
+        # Check routing tables for an immediate FIB hit
+        table, data = self.check_tables(name)
+        if table == "FIB" and data:
+            # Resolve next-hop port (entry may contain int or a name)
+            nh = data.get("NextHops")
+            target_port = None
+            try:
+                # direct integer
+                target_port = int(nh)
+            except Exception:
+                # lookup by name (aliases)
+                if isinstance(nh, str) and nh in self.name_to_port:
+                    try:
+                        target_port = int(self.name_to_port[nh])
+                    except Exception:
+                        target_port = None
+
+            if target_port:
+                # Create and send a REAL_INTEREST directly
+                real_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=True)
+                try:
+                    self.sock.sendto(real_pkt, (self.host, target_port))
+                    print(f"[{self.name}] FIB HIT: Created REAL_INTEREST (seq={seq_num}) for '{name}' -> next_hop port {target_port}")
+                    self.log(f"FIB HIT: REAL_INTEREST seq={seq_num} '{name}' -> port {target_port}")
+                    # record PIT entry locally so DATA can be forwarded back (origin is self)
+                    if name not in self.pit:
+                        self.pit[name] = [target_port]
+                        print(f"[{self.name}] Added PIT entry for '{name}' with interface [{target_port}]")
+                        self.log(f"Added PIT entry for '{name}' with interface [{target_port}]")
+                except Exception as e:
+                    print(f"[{self.name}] ERROR sending REAL_INTEREST to port {target_port}: {e}")
+                    self.log(f"ERROR sending REAL_INTEREST to port {target_port}: {e}")
+                return real_pkt
+
+        # No FIB hit → send NS QUERY (data_flag=False)
+        # Build query packet (origin=self.name) — the driver/other callers might pass target NS port but
+        # try to avoid sending directly to NS by choosing a first-hop neighbor if known.
+        query_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=False)
+
+        # Resolve whether the provided `target` looks like a NameServer port we know
         resolved_target = target
         try:
-            # find any known NameServer name that maps to the target port
-            ns_names = [n for n, p in self.name_to_port.items() if "NameServer" in n and int(p) == int(target[1])]
-            if ns_names:
-                # choose a first-hop neighbor (prefer neighbors recorded in neighbor_table and name_to_port)
-                first_hop_port = None
-                for nbr in self.neighbor_table.keys():
-                    p = self.name_to_port.get(nbr)
-                    if p and int(p) != int(target[1]):
-                        first_hop_port = int(p)
-                        first_hop_name = nbr
-                        break
-                # fallback: any known port that is not the NS port
-                if not first_hop_port:
-                    for n, p in self.name_to_port.items():
+            if target and isinstance(target, (list, tuple)) and int(target[1]) != 0:
+                ns_names = [n for n, p in self.name_to_port.items() if "NameServer" in n and int(p) == int(target[1])]
+            else:
+                ns_names = []
+        except Exception:
+            ns_names = []
+
+        if ns_names:
+            # prefer a neighbor first-hop toward the NS (neighbor_table keys map to names)
+            first_hop_port = None
+            first_hop_name = None
+            for nbr in list(self.neighbor_table.keys()):
+                p = self.name_to_port.get(nbr)
+                if p and int(p) != int(target[1]):
+                    first_hop_port = int(p)
+                    first_hop_name = nbr
+                    break
+            # fallback: any known non-NS port
+            if not first_hop_port:
+                for n, p in self.name_to_port.items():
+                    try:
                         if int(p) != int(target[1]):
                             first_hop_port = int(p)
                             first_hop_name = n
                             break
-                if first_hop_port:
-                    resolved_target = (self.host, first_hop_port)
-                    print(f"[{self.name}] Redirecting INTEREST for NameServer {ns_names[0]} -> first-hop {first_hop_name} (port {first_hop_port})")
-                    self.log(f"[{self.name}] Redirected INTEREST target {target} -> first-hop {resolved_target}")
-        except Exception:
-            resolved_target = target
+                    except Exception:
+                        continue
+            if first_hop_port:
+                resolved_target = (self.host, first_hop_port)
+                print(f"[{self.name}] NS QUERY: redirecting toward first-hop {first_hop_name} (port {first_hop_port}) instead of NS port {target[1]}")
+                self.log(f"NS QUERY redirect -> first-hop {first_hop_name} port {first_hop_port}")
 
-        self.sock.sendto(pkt, resolved_target)
-        print(f"[{self.name}] Sent INTEREST packet to {resolved_target} (data_flag={data_flag})")
-        self.log(f"[{self.name}] Sent INTEREST packet to {resolved_target} (data_flag={data_flag})")
-        # Record the buffer entry using the actual hop we sent to (resolved_target)
-        # so later forwarding uses the same next-hop and does not re-query the NS.
-        self.add_to_buffer(pkt, resolved_target, reason="Originated Interest")
-        return pkt
+        # Send the query toward the resolved target (first-hop or NS fallback)
+        try:
+            # Record a PIT entry for this originated interest so that when DATA/ROUTE replies
+            # arrive they can be forwarded toward the interface we used to send the query.
+            try:
+                pit_iface = None
+                if isinstance(resolved_target, (list, tuple)) and int(resolved_target[1]) != 0:
+                    pit_iface = int(resolved_target[1])
+                elif isinstance(resolved_target, int):
+                    pit_iface = int(resolved_target)
+                if pit_iface:
+                    if name not in self.pit:
+                        self.pit[name] = [pit_iface]
+                        print(f"[{self.name}] Added PIT entry for '{name}' with interface [{pit_iface}]")
+                        self.log(f"Added PIT entry for '{name}' with interface [{pit_iface}]")
+                    else:
+                        if pit_iface not in self.pit[name]:
+                            self.pit[name].append(pit_iface)
+                            print(f"[{self.name}] Updated PIT for '{name}' with interface {pit_iface}")
+                            self.log(f"Updated PIT for '{name}' with interface {pit_iface}")
+            except Exception as _e:
+                self.log(f"[{self.name}] Failed to add PIT entry for originated interest {name}: {_e}")
+
+            self.add_to_buffer(query_pkt, resolved_target, reason="Originated Interest (NS query)")
+            self.log(f"Buffered originated interest for '{name}' -> {resolved_target}")
+            self.sock.sendto(query_pkt, resolved_target)
+            print(f"[{self.name}] Sent NS QUERY (seq={seq_num}) for '{name}' to {resolved_target} (data_flag=False)")
+            self.log(f"Sent NS QUERY seq={seq_num} '{name}' -> {resolved_target}")
+        except Exception as e:
+            print(f"[{self.name}] ERROR sending NS QUERY to {resolved_target}: {e}")
+            self.log(f"ERROR sending NS QUERY to {resolved_target}: {e}")
+
+        return query_pkt
 
     def send_data(self, seq_num, name, payload, flags=0x0, target=("127.0.0.1", 0)):
         payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
@@ -1169,9 +1263,6 @@ class Node:
                                         data_flag=False,
                                         visited_domains=list(visited)  # <-- keep visited domains
                                     )
-                                    self.sock.sendto(forward_pkt, ("127.0.0.1", int(ns_port)))
-
-                                    print(f"[{self.name}] Forwarded interdomain interest for {parsed['Name']} → {target_ns} (port {ns_port})")
                                     
                                     try:
                                         full_key = parsed.get("Name")
@@ -1186,6 +1277,8 @@ class Node:
                                     except Exception as e:
                                         self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
 
+                                    self.sock.sendto(forward_pkt, ("127.0.0.1", int(ns_port)))
+                                    print(f"[{self.name}] Forwarded interdomain interest for {parsed['Name']} → {target_ns} (port {ns_port})")
                                     self.log(f"[{self.name}] Forwarded interdomain interest → {target_ns} with visited={visited}")
 
                                 except Exception as e:
@@ -1253,10 +1346,6 @@ class Node:
                         ns_port = self.name_to_port.get(ns_name)
                         if ns_port:
                             try:
-                                self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
-                                self.log(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
-                                print(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
-
                                 try:
                                     full_key = parsed.get("Name")
                                     if full_key:
@@ -1269,7 +1358,9 @@ class Node:
                                             print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
                                 except Exception as e:
                                     self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
-
+                                self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
+                                self.log(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
+                                print(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
                                 return
                             except Exception as e:
                                 self.log(f"[{self.name}] Error routing INTEREST with 0x1 flag to local NameServer {ns_name}:{ns_port} - {e}")
@@ -1728,6 +1819,7 @@ class Node:
             if table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.log(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
+                self.remove_pit(pkt_obj.name, addr[1])
                 self.send_data(
                     seq_num=pkt_obj.seq_num,
                     name=pkt_obj.name,
@@ -1735,7 +1827,6 @@ class Node:
                     flags=ACK_FLAG,
                     target=addr
                 )
-                self.remove_pit(pkt_obj.name, addr[1])
             elif table == "FIB":
                 next_hop = data["NextHops"]
                 print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
@@ -1833,10 +1924,22 @@ class Node:
                     if name in self.pit:
                         interfaces = list(self.pit[name])
                         for interface in interfaces:
+                            # Skip forwarding back to the interface that sent this DATA (avoid loop/duplicate)
+                            try:
+                                incoming_port = addr[1] if addr else None
+                            except Exception:
+                                incoming_port = None
+
+                            if incoming_port is not None and int(interface) == int(incoming_port):
+                                # remove the PIT entry but do not forward to the sender
+                                self.remove_pit(name, interface)
+                                self.log(f"[{self.name}] Skipped forwarding reassembled DATA back to incoming iface {interface}")
+                                continue
+
+                            self.remove_pit(name, interface)
                             pkt = create_data_packet(parsed["SequenceNumber"], name, full_payload, parsed["Flags"], 1, 1)
                             self.sock.sendto(pkt, (self.host, interface))
                             self.log(f"Forwarded reassembled DATA to PIT interface {interface}")
-                            self.remove_pit(name, interface)
                     del self.fragment_buffer[frag_key]
             else:
                 # Regular DATA from destination: add to CS and forward using PIT
@@ -1851,10 +1954,22 @@ class Node:
                 if name in self.pit:
                     interfaces = list(self.pit[name])
                     for interface in interfaces:
+                        # Avoid forwarding DATA back to the interface it arrived from (prevents duplicate delivery)
+                        try:
+                            incoming_port = addr[1] if addr else None
+                        except Exception:
+                            incoming_port = None
+
+                        if incoming_port is not None and int(interface) == int(incoming_port):
+                            # remove PIT entry but don't send back to sender
+                            self.remove_pit(name, interface)
+                            self.log(f"[{self.name}] Skipped forwarding DATA back to incoming iface {interface}")
+                            continue
+
+                        self.remove_pit(name, interface)
                         pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
                         self.sock.sendto(pkt, (self.host, interface))
                         self.log(f"Forwarded DATA to PIT interface {interface}")
-                        self.remove_pit(name, interface)
 
             return pkt_obj
 
@@ -2141,6 +2256,7 @@ class Node:
                                     self.log(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
                                     print(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
                                     forwarded_local.append(entry)
+                                    print("hello")
                     except Exception as e:
                         print(f"[{self.name}] Error storing FIB from NS reply: {e}")
                 else:

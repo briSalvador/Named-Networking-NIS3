@@ -20,6 +20,8 @@ ACK_FLAG = 0x1
 RET_FLAG = 0x2
 TRUNC_FLAG = 0x3
 
+_PRINT_LOCK = threading.Lock()
+
 def create_data_packet(seq_num, name, payload, flags=0x0):
     packet_type = DATA
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
@@ -803,8 +805,9 @@ class NameServer:
                                 "seq_num": seq_num,    # optional, can help with duplicates
                                 "ts": time.time()
                             }
-                            print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]")
-                            print(f"[NS {self.ns_name}] Current Pending Intersts: {self.pending_interests}")
+                            # Print the ENCAP-forwarded message and the pending table together
+                            with _PRINT_LOCK:
+                                print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                             #print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
                             return
                         except Exception as e:
@@ -851,8 +854,8 @@ class NameServer:
                                 "seq_num": seq_num,    # optional, can help with duplicates
                                 "ts": time.time()
                             }
-                            print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]")
-                            #print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
+                            with _PRINT_LOCK:
+                                print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                             return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
@@ -886,8 +889,8 @@ class NameServer:
                                 "seq_num": seq_num,    # optional, can help with duplicates
                                 "ts": time.time()
                             }
-                            print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]")
-                            #print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
+                            with _PRINT_LOCK:
+                                print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                             return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to alias {alias} - {e}")
@@ -924,9 +927,9 @@ class NameServer:
                             hop_count=len(path),
                             visited_domains=parsed.get("VisitedDomains", [])
                         )
-                self.sock.sendto(ack_pkt, addr)
                 print(f"[NS {self.ns_name}] Sent ROUTE_ACK for ENCAP name='{enc_name}' "
                     f"(full='{parsed["Name"]}', hop_count={len(path)}) to {addr}")
+                self.sock.sendto(ack_pkt, addr)
             else:
                 resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
                 self.sock.sendto(resp, addr)
@@ -1006,13 +1009,13 @@ class NameServer:
                     hop_count=parsed.get("HopCount", 0),
                     visited_domains=visited_domains
                 )
-                self.sock.sendto(new_route_ack, (self.host, int(next_hop)))
                 print(f"[NS {self.ns_name}] Forwarded ROUTE_ACK → next hop (port {next_hop})")
                 print(f"[NS {self.ns_name}] New Visited Domains List: {visited_domains}")
+                print(f"[NS {self.ns_name}] Cleared pending ENCAP interest for {cleaned_ack_name}")
                 
+                self.sock.sendto(new_route_ack, (self.host, int(next_hop)))
                 # remove it
                 self.pending_interests.pop(found_key, None)
-                print(f"[NS {self.ns_name}] Cleared pending ENCAP interest for {cleaned_ack_name}")
                 return
             except Exception as e:
                 print(f"[NS {self.ns_name}] Error forwarding ACK to:{next_hop} - {e}")

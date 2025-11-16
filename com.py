@@ -146,18 +146,27 @@ if __name__ == "__main__":
 
     # # Standard Test Case
     # interest_name = "/DLSU/Miguel/cam1/hello.txt"
-    # dcam1.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from cam1")
+    # dcam1.add_cs(interest_name, "Hello from cam1")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # # Test Case for /DLSU (used to check if name truncation is correct)
     # interest_name = "/DLSU/hello.txt"
-    # dlsu.add_cs("/DLSU/hello.txt", "Hello from DLSU!")
+    # dlsu.add_cs(interest_name, "Hello from DLSU!")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # # Test Case if destination is adjacent to at least one router on the way to the NS
-    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
-    # miguel.add_cs("/DLSU/Miguel/cam1/hello.txt", "Hello from Miguel")
+    # interest_name = "/DLSU/Miguel/hello.txt"
+    # miguel.add_cs(interest_name, "Hello from Miguel")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # # Test Case if within ADMU domain
+    # interest_name = "/ADMU/hello.txt"
+    # admu.add_cs(interest_name, "Hello from ADMU!")
+    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
+
+    # # Test Case if within UP domain
+    # interest_name = "/UP/hello.txt"
+    # up.add_cs(interest_name, "Hello from UP!")
 
     # Test case for DLSU -> ADMU interdomain interests
     # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
@@ -165,13 +174,13 @@ if __name__ == "__main__":
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test case for ADMU -> UP interdomain interests
-    # interest_name = "/UP/Salcedo/PC1/hello_bitch.txt"
-    # upc1.add_cs(interest_name, "Hello from bitch!")
+    # interest_name = "/UP/Salcedo/PC1/hello.txt"
+    # upc1.add_cs(interest_name, "Hello from upc1!")
     # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test case for DLSU -> UP interdomain interests
-    interest_name = "/UP/Salcedo/PC1/we_bout_to_die.txt"
-    upc1.add_cs(interest_name, "Boom panis")
+    interest_name = "/UP/Salcedo/PC1/hello.txt"
+    upc1.add_cs(interest_name, "Hello from upc1")
     send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # # Test Case if destination exists but file does not
@@ -181,16 +190,6 @@ if __name__ == "__main__":
     # # Test case if destination does not have a filename
     # interest_name = "/DLSU/Miguel/cam1"
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # # Test Case if within ADMU domain
-    # interest_name = "/ADMU/hello.txt"
-    # admu.add_cs("/ADMU/hello.txt", "Hello from ADMU!")
-    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
-
-    # # Test Case if within UP domain
-    # interest_name = "/UP/hello.txt"
-    # up.add_cs("/UP/hello.txt", "Hello from UP!")
-    # send_interest_via_ns(upc1, seq_num=0, name=interest_name, data_flag=False)
 
     time.sleep(5)
 
