@@ -3,12 +3,22 @@ import threading
 import struct
 import time
 import json
+import builtins
 from DataPacket import DataPacket
 from RouteDataPacket import RouteDataPacket
 from InterestPacket import InterestPacket
-from Packet import Packet
 from datetime import datetime
 from collections import deque
+
+_print_lock = threading.Lock()
+_original_print = builtins.print
+def _thread_safe_print(*args, **kwargs):
+    # always flush so ordering is visible immediately
+    kwargs.setdefault("flush", True)
+    with _print_lock:
+        _original_print(*args, **kwargs)
+# Replace built-in print for this process so all prints are serialized
+builtins.print = _thread_safe_print
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -17,6 +27,7 @@ ROUTING_DATA = 0x3
 HELLO = 0x4
 UPDATE = 0x5
 ERROR = 0x6
+ROUTE_ACK = 0x7
 
 # Flag Masks (lower 4 bits)
 ACK_FLAG = 0x1
@@ -31,21 +42,41 @@ DROPPED_ERROR = 0X4
 
 FRAGMENT_SIZE = 1500
 
-# TODO (As of Sep 30): 
-# FIB: Add hop count for FIB entries so that new routes are compared with existing ones and replaced
-# if new route is shorter.
+def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False, visited_domains=None):
+    if visited_domains is None:
+        visited_domains = []
 
-def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False):
     packet_type = INTEREST
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
     seq_num = seq_num & 0xFF
     name_bytes = name.encode("utf-8")
     name_length = len(name_bytes)
+
     origin_bytes = origin_node.encode("utf-8")
     origin_length = len(origin_bytes)
+
     data_flag_byte = b'\x01' if data_flag else b'\x00'
+
+    # ---- Encode visited_domains ----
+    vd_count = len(visited_domains) & 0xFF
+    vd_bytes = bytes([vd_count])
+
+    for dom in visited_domains:
+        dom_b = dom.encode("utf-8")
+        vd_bytes += bytes([len(dom_b) & 0xFF]) + dom_b
+
+    # ---- Build packet ----
     header = struct.pack("!BBB", packet_type_flags, seq_num, name_length)
-    packet = header + name_bytes + struct.pack("!B", origin_length) + origin_bytes + data_flag_byte
+    packet = (
+        header +
+        name_bytes +
+        bytes([origin_length]) +
+        origin_bytes +
+        data_flag_byte +
+        vd_bytes
+    )
+
     return packet
 
 def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_fragments=1):
@@ -115,25 +146,34 @@ def parse_error_packet(packet):
 
 def parse_interest_packet(packet):
     packet_type_flags, seq_num, name_length = struct.unpack("!BBB", packet[:3])
+
     name_start = 3
     name_end = name_start + name_length
     name = packet[name_start:name_end].decode("utf-8")
+
     origin_length = packet[name_end]
     origin_start = name_end + 1
     origin_end = origin_start + origin_length
     origin_node = packet[origin_start:origin_end].decode("utf-8")
+
     data_flag = bool(packet[origin_end])  # 1 byte after origin
+
+    # ---- Parse visited domains ----
+    vd_index = origin_end + 1
+    visited_count = packet[vd_index]
+    vd_index += 1
+
+    visited_domains = []
+    for _ in range(visited_count):
+        dom_len = packet[vd_index]
+        vd_index += 1
+        dom = packet[vd_index:vd_index + dom_len].decode("utf-8")
+        vd_index += dom_len
+        visited_domains.append(dom)
+
+    # Extract fields
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
-
-    # Split name into node_name and file_name
-    name_segments = name.strip('/').split('/') if isinstance(name, str) else []
-    if name_segments and '.' in name_segments[-1]:
-        file_name = name_segments[-1]
-        node_name = '/' + '/'.join(name_segments[:-1]) if len(name_segments) > 1 else '/' + name_segments[0]
-    else:
-        file_name = None
-        node_name = '/' + '/'.join(name_segments) if name_segments else name
 
     return {
         "PacketType": packet_type,
@@ -143,40 +183,71 @@ def parse_interest_packet(packet):
         "Name": name,
         "OriginNode": origin_node,
         "DataFlag": data_flag,
-        "NodeName": node_name,
-        "FileName": file_name,
+        "VisitedDomains": visited_domains,
     }
 
 def parse_route_data_packet(packet):
     """
-    ROUTING_DATA format (matches NameServer.create_route_data_packet):
-    header: !BBBB  => packet_type_flags, seq_num, payload_size, name_length
-    then name_bytes (name_length) then payload_bytes (payload_size)
-    payload is usually JSON (dict) when created by the NameServer.
+    Canonical parser for ROUTING_DATA packets.
+    Header: !BBBB => packet_type_flags, seq_num, info_size, name_length
+    Payload: name_bytes (name_length), then routing_info_bytes (info_size)
+    routing_info is JSON when sent by NameServer.
     """
-    packet_type_flags, seq_num, payload_size, name_length = struct.unpack("!BBBB", packet[:4])
-    name_start = 4
-    name_end = name_start + name_length
-    name = packet[name_start:name_end].decode("utf-8")
-    payload_start = name_end
-    payload_end = payload_start + payload_size
-    payload_bytes = packet[payload_start:payload_end]
-    payload_text = payload_bytes.decode("utf-8", errors="ignore")
-    payload = None
+    if len(packet) < 4:
+        raise ValueError("Packet too short for ROUTE header")
+    packet_type_flags, seq_num, info_size, name_length = struct.unpack("!BBBB", packet[:4])
+    total_len = 4 + name_length + info_size
+    if len(packet) < total_len:
+        raise ValueError("Packet shorter than declared ROUTE lengths")
+
+    name = packet[4:4 + name_length].decode("utf-8", errors="ignore")
+    info_bytes = packet[4 + name_length:4 + name_length + info_size]
     try:
-        payload = json.loads(payload_text)
+        info_text = info_bytes.decode("utf-8", errors="ignore")
     except Exception:
-        # fallback: keep raw text
-        payload = payload_text
+        info_text = ""
+
+    info_json = None
+    try:
+        info_json = json.loads(info_text) if info_text else None
+    except Exception:
+        info_json = None
+
+    # Normalize fields from JSON payload (if present)
+    origin_name = None
+    path = []
+    dest = None
+    next_hop = None
+    next_hop_port = None
+    path_to_origin = None
+
+    if isinstance(info_json, dict):
+        origin_name = info_json.get("origin_name") or info_json.get("origin")
+        path = info_json.get("path") or []
+        dest = info_json.get("dest")
+        next_hop = info_json.get("next_hop")
+        next_hop_port = info_json.get("next_hop_port")
+        path_to_origin = info_json.get("path_to_origin")
+    elif isinstance(info_text, str) and "," in info_text:
+        path = [p.strip() for p in info_text.split(",") if p.strip()]
+
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
     return {
         "PacketType": packet_type,
         "Flags": flags,
         "SequenceNumber": seq_num,
+        "InfoSize": info_size,
         "NameLength": name_length,
         "Name": name,
-        "Payload": payload,
+        "OriginName": origin_name,
+        "Path": path,
+        "Dest": dest,
+        "NextHop": next_hop,
+        "NextHopPort": next_hop_port,
+        "PathToOrigin": path_to_origin,
+        "RoutingInfo": info_text,
+        "RoutingInfoJson": info_json,
     }
 
 def parse_data_packet(packet):
@@ -272,6 +343,106 @@ def create_update_packet(name, origin_name, next_hop_port, number_of_hops):
     # Build packet header
     header = struct.pack("!BBH", packet_type_flags, name_length, update_info_length)
     return header + name_bytes + update_info_bytes
+
+def parse_route_ack_packet(packet):
+    """Parse ROUTE_ACK packets sent by nodes confirming a border path."""
+    if len(packet) < 4:
+        return None
+
+    packet_type_flags, seq_num, info_size, name_length = struct.unpack("!BBBB", packet[:4])
+    name_start = 4
+    name_end = name_start + name_length
+    if len(packet) < name_end:
+        return None
+    name = packet[name_start:name_end].decode("utf-8")
+
+    idx = name_end
+    # source_name_length
+    if len(packet) < idx + 1:
+        return None
+    source_name_length = packet[idx]
+    idx += 1
+    if len(packet) < idx + source_name_length:
+        return None
+    source_name = packet[idx:idx + source_name_length].decode("utf-8")
+    idx += source_name_length
+
+    # hop_count
+    if len(packet) < idx + 1:
+        return None
+    hop_count = packet[idx]
+    idx += 1
+
+    # visited domains
+    visited_domains = []
+    if len(packet) >= idx + 1:
+        vd_count = packet[idx]
+        idx += 1
+        for _ in range(vd_count):
+            if len(packet) < idx + 1:
+                break
+            dom_len = packet[idx]
+            idx += 1
+            if len(packet) < idx + dom_len:
+                break
+            dom = packet[idx:idx + dom_len].decode("utf-8")
+            idx += dom_len
+            visited_domains.append(dom)
+
+    return {
+        "PacketType": (packet_type_flags >> 4) & 0xF,
+        "Flags": packet_type_flags & 0xF,
+        "SequenceNumber": seq_num,
+        "NameLength": name_length,
+        "Name": name,
+        "SourceName": source_name,
+        "HopCount": hop_count,
+        "VisitedDomains": visited_domains,
+    }
+
+def create_route_ack_packet(seq_num, name, flags=0x0, source_name="", hop_count=0, visited_domains=[]):
+    """
+    Create a ROUTE_ACK packet.
+
+    Format:
+      | packet_type_flags (1B) | seq_num (1B) | info_size (1B) | name_length (1B) |
+      | name (variable) | source_name_length (1B) | source_name (variable) | hop_count (1B) |
+
+    - packet_type_flags = (ROUTE_ACK << 4) | (flags & 0xF)
+    - hop_count is 1 byte (0–255)
+    """
+    packet_type = ROUTE_ACK
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    seq_num = seq_num & 0xFF
+
+    name_bytes = name.encode("utf-8")
+    name_length = len(name_bytes) & 0xFF
+
+    source_name_bytes = source_name.encode("utf-8")
+    source_name_length = len(source_name_bytes) & 0xFF
+
+    # Build visited domains bytes: count (1B) followed by repeated (len(1B)+bytes)
+    vd_bytes = b""
+    for dom in visited_domains:
+        dom_b = dom.encode("utf-8")
+        vd_bytes += struct.pack("!B", len(dom_b) & 0xFF) + dom_b
+    vd_count = len(visited_domains) & 0xFF
+
+    # info_size counts: source_name_length + hop_count(1) + vd_count(1) + sum(each dom_len+1)
+    info_size = source_name_length + 1 + 1 + sum((len(d.encode("utf-8")) & 0xFF) + 1 for d in visited_domains)
+
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, info_size, name_length)
+    packet = (
+        header
+        + name_bytes
+        + struct.pack("!B", source_name_length)
+        + source_name_bytes
+        + struct.pack("!B", hop_count)
+        + struct.pack("!B", vd_count)
+        + vd_bytes
+    )
+    return packet
 
 def create_ns_update_packet(name, origin_name, next_hop_port, number_of_hops):
     packet_type = UPDATE
@@ -424,84 +595,6 @@ def get_domains_from_name(node_name):
             domains.append(segments[1])
     return domains
 
-def parse_route_data_packet(packet):
-    if len(packet) < 4:
-        raise ValueError("Packet too short to parse route data header")
-    packet_type_flags, seq_num, info_size, name_length = struct.unpack("!BBBB", packet[:4])
-    if len(packet) < 4 + name_length + info_size:
-        raise ValueError("Packet too short for declared name/routing info lengths")
-    name = packet[4:4+name_length].decode("utf-8")
-    routing_info = packet[4+name_length:4+name_length+info_size]
-
-    try:
-        routing_info_decoded = routing_info.decode("utf-8")
-    except Exception:
-        routing_info_decoded = routing_info
-
-    # Try to parse as JSON if possible
-    try:
-        routing_info_json = json.loads(routing_info_decoded)
-    except Exception:
-        routing_info_json = None
-
-    # Extract all relevant fields from the new route data packet format
-    path = []
-    origin_name = None
-    dest = None
-    next_hop = None
-    next_hop_port = None
-    if isinstance(routing_info_json, dict):
-        path = routing_info_json.get("path", [])
-        origin_name = routing_info_json.get("origin_name")
-        dest = routing_info_json.get("dest")
-        next_hop = routing_info_json.get("next_hop")
-        next_hop_port = routing_info_json.get("next_hop_port")
-    elif isinstance(routing_info_decoded, str) and "," in routing_info_decoded:
-        path = routing_info_decoded.split(",")
-    packet_type = (packet_type_flags >> 4) & 0xF
-    flags = packet_type_flags & 0xF
-
-    return {
-        "PacketType": packet_type,
-        "Flags": flags,
-        "SequenceNumber": seq_num,
-        "InfoSize": info_size,
-        "NameLength": name_length,
-        "Name": name,
-        "Path": path,
-        "OriginName": origin_name,
-        "Dest": dest,
-        "NextHop": next_hop,
-        "NextHopPort": next_hop_port,
-        "RoutingInfo": routing_info_decoded,
-        "RawRoutingInfo": routing_info,
-        "RoutingInfoJson": routing_info_json
-    }
-
-
-def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
-    """
-    Create a ROUTING_DATA packet. routing_info can be a list (path) or a string.
-    Packet format: !BBBB | name_bytes | routing_info_bytes
-      packet_type_flags (1 byte), seq_num (1), info_size (1), name_length (1)
-    """
-    packet_type = ROUTING_DATA
-    packet_type_flags = (packet_type << 4) | (flags & 0xF)
-    seq_num = seq_num & 0xFF
-    name_bytes = name.encode("utf-8")
-    name_length = len(name_bytes) & 0xFF
-
-    if isinstance(routing_info, list):
-        routing_info_bytes = ",".join(routing_info).encode("utf-8")
-    elif isinstance(routing_info, str):
-        routing_info_bytes = routing_info.encode("utf-8")
-    else:
-        routing_info_bytes = bytes(routing_info)
-
-    info_size = len(routing_info_bytes) & 0xFF
-    header = struct.pack("!BBBB", packet_type_flags, seq_num, info_size, name_length)
-    return header + name_bytes + routing_info_bytes
-
 class Node:
     def log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
@@ -539,10 +632,11 @@ class Node:
             print(f"[{self.name}] Error loading neighbors from {filename}: {e}")
             self.log(f"[{self.name}] Error loading neighbors from {filename}: {e}")
 
-    def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999):
+    def __init__(self, name, host="127.0.0.1", port=0, broadcast_port=9999, isborder=False):
         self.name = name
         self.domains = get_domains_from_name(name)
         self.host = host
+        self.isborder = isborder
         self.port = port if port != 0 else self._get_free_port()
         self.broadcast_port = broadcast_port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -589,188 +683,138 @@ class Node:
 
     def _handle_route_data(self, packet, addr):
         """
-        Process an incoming ROUTING_DATA packet:
-        - If the ROUTE is for this node (origin_name == self.name) -> update FIB and forward buffered
-          'real' interest packets for that destination to the discovered next hop.
-        - Otherwise, forward the ROUTING_DATA to interfaces recorded in the PIT for the destination.
-        - Fallback: if no PIT entry, attempt direct send to origin_name's port (if known).
+        Robust ROUTE_DATA handling:
+         - Parse route payload and prefer forwarding toward origin via path_to_origin
+         - Install FIB entries if this node appears in the provided path (so future queries use FIB)
+         - Forward the raw ROUTE_DATA packet (unchanged) to the next hop's UDP port
+         - Provide detailed debug output when forwarding fails
         """
-        parsed = parse_route_data_packet(packet)
-        payload = parsed.get("Payload")
-        dest_name = parsed.get("Name")
-        origin_name = None
-        next_hop_name = None
+        try:
+            parsed = parse_route_data_packet(packet)
+        except Exception as e:
+            self.log(f"[{self.name}] _handle_route_data: parse error: {e}")
+            return
 
-        if isinstance(payload, dict):
-            origin_name = payload.get("origin_name") or payload.get("origin")
-            next_hop_name = payload.get("next_hop") or payload.get("nextHop") or payload.get("next")
-            # sometimes payload might include explicit destination
-            dest_name = payload.get("destination") or dest_name
-        else:
-            # try simple textual parse: "origin:... next_hop:..."
-            text = payload if isinstance(payload, str) else ""
-            # crude parsing in case NS used a non-json payload
-            try:
-                parts = text.split()
-                for p in parts:
-                    if p.startswith("origin="):
-                        origin_name = p.split("=", 1)[1]
-                    if p.startswith("next_hop=") or p.startswith("nextHop="):
-                        next_hop_name = p.split("=", 1)[1]
-            except Exception:
-                pass
+        # canonical fields returned by parse_route_data_packet
+        origin_name = parsed.get("OriginName") or (parsed.get("RoutingInfoJson") or {}).get("origin_name") if isinstance(parsed.get("RoutingInfoJson"), dict) else None
+        path = parsed.get("Path") or []
+        path_to_origin = parsed.get("PathToOrigin") or []
+        dest = parsed.get("Dest") or parsed.get("Name")
+        next_hop_field = parsed.get("NextHop")
 
-        self.log(f"[{self.name}] Received ROUTE DATA from {addr} payload={payload}")
+        self.log(f"[{self.name}] Received ROUTE DATA from {addr} payload_origin={origin_name} dest={dest} path={path} path_to_origin={path_to_origin} next_hop={next_hop_field}")
 
-        # Ensure path is normalized to a list of node-names
-        path_field = parsed.get("Path", [])
-        if isinstance(path_field, str):
-            path = [p.strip() for p in path_field.split(",") if p.strip()]
-        elif isinstance(path_field, list):
-            path = path_field
-        else:
-            path = []
+        # If path is a string, normalize to list
+        if isinstance(path, str):
+            path = [p.strip() for p in path.split(",") if p.strip()]
+        if isinstance(path_to_origin, str):
+            path_to_origin = [p.strip() for p in path_to_origin.split(",") if p.strip()]
 
-        # If this node appears in the returned path, install a FIB entry pointing
-        # to the next hop in that path (toward the destination). This prevents
-        # installing FIBs that point back to the sender port and avoids ping-pong.
+        # If this node is included in the returned path, install a FIB entry pointing to the next hop in that path
         try:
             if path and self.name in path:
                 idx = path.index(self.name)
                 if idx < len(path) - 1:
-                    next_node_name = path[idx + 1]
-                    # Resolve port for next_node_name
-                    next_port = None
-                    if next_node_name in self.name_to_port:
-                        try:
-                            next_port = int(self.name_to_port[next_node_name])
-                        except Exception:
-                            next_port = None
-                    if next_port is None:
-                        fib_entry = self.fib.get(next_node_name)
-                        if fib_entry:
-                            try:
-                                next_port = int(fib_entry["NextHops"])
-                            except Exception:
-                                next_port = None
-                    if next_port:
-                        remaining_hops = len(path) - idx - 1
-                        # IMPORTANT: mark this FIB as coming from the NameServer so it
-                        # can be used for parent/fuzzy matching by other nodes.
-                        self.add_fib(dest_name, next_port, exp_time=5000, hop_count=remaining_hops, source="NS")
-                        self.log(f"[{self.name}] Installed FIB for {dest_name} -> next hop {next_node_name} (port {next_port}), remaining_hops={remaining_hops}")
+                    # next hop toward destination (from this node's perspective)
+                    next_toward_dest = path[idx + 1]
+                    port, resolved = self._resolve_port_by_name(next_toward_dest)
+                    if port:
+                        # install FIB so real interests will be forwarded correctly going to dest
+                        self.add_fib(dest, port, exp_time=60000, hop_count=len(path) - idx - 1, source="NS")
+                        self.log(f"[{self.name}] Installed FIB for {dest} -> next hop {next_toward_dest} (port {port})")
         except Exception as e:
             self.log(f"[{self.name}] Error installing FIB from ROUTE path: {e}")
 
-        # If this ROUTING_DATA is for this node (we were the origin of the original NS query)
+        # If this ROUTE_DATA is actually intended for this node (origin of the original query)
+        print(f"[{self.name}] Checking if ROUTE_DATA is for self: origin_name={origin_name}, self.name={self.name}")
         if origin_name == self.name:
-            # Update FIB for the destination using the provided next_hop_name (if resolvable)
-            if next_hop_name:
-                next_port = self.name_to_port.get(next_hop_name)
-                if next_port:
-                    self.fib[dest_name] = {"NextHops": str(next_port)}
-                    self.log(f"[{self.name}] Updated FIB: {dest_name} -> {next_hop_name} (port {next_port})")
-                else:
-                    self.log(f"[{self.name}] ROUTE contains next_hop {next_hop_name} but no port known locally")
+            # Update FIB for the destination using provided next_hop_field if resolvable
+            print("[{self.name}] ROUTE_DATA is for self; processing")
+            if next_hop_field:
+                port, resolved = self._resolve_port_by_name(next_hop_field)
+                if port:
+                    # Avoid sending to our own port (would loop back to ourselves)
+                    if int(port) == int(self.port):
+                        self.log(f"[{self.name}] Resolved next_hop_port == self.port ({port}); skipping send to avoid loop")
+                    else:
+                        try:
+                            self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                            self.log(f"[{self.name}] Forwarded ROUTE_DATA to next_hop {resolved} (port {port})")
+                        except Exception as e:
+                            self.log(f"[{self.name}] Failed forwarding ROUTE_DATA to {resolved}:{port} - {e}")
 
-            # Forward any buffered "real" interest packets for this destination to the discovered next hop
+            # Forward any buffered real interests for this destination
             forwarded = []
             with getattr(self, "buffer_lock", threading.Lock()):
-                if hasattr(self, "buffer"):
+                try:
                     for entry in list(self.buffer):
-                        if entry.get("destination") == dest_name:
-                            target_port = None
-                            # prefer explicit FIB entry we just set
-                            if dest_name in self.fib:
-                                target_port = int(self.fib[dest_name]["NextHops"])
-                            elif next_hop_name:
-                                target_port = self.name_to_port.get(next_hop_name)
-                            if target_port:
-                                try:
-                                    self.sock.sendto(entry["packet"], ("127.0.0.1", target_port))
-                                    forwarded.append(entry)
-                                    self.log(f"[{self.name}] Forwarded buffered real interest for {dest_name} to port {target_port}")
-                                except Exception as e:
-                                    self.log(f"[{self.name}] Error sending buffered interest to port {target_port}: {e}")
-            # remove forwarded entries from buffer
-            if forwarded:
-                with getattr(self, "buffer_lock", threading.Lock()):
-                    for e in forwarded:
                         try:
-                            self.buffer.remove(e)
-                        except ValueError:
-                            pass
+                            parsed_interest = parse_interest_packet(entry["packet"])
+                        except Exception:
+                            continue
+                        if parsed_interest.get("Name") == dest:
+                            # decide forward using FIB entry
+                            nh = self.get_next_hops(dest)
+                            if nh:
+                                target_port = nh
+                                self.sock.sendto(entry["packet"], ("127.0.0.1", int(target_port)))
+                                forwarded.append(entry)
+                                self.buffer.remove(entry)
+                                self.log(f"[{self.name}] Forwarded buffered interest for {dest} to port {target_port}")
+                except Exception as e:
+                    self.log(f"[{self.name}] Error forwarding buffered interests: {e}")
             return
 
-        # Not for this node: forward to PIT interfaces for the destination
-        pit_ifaces = self.pit.get(dest_name, [])
-        if pit_ifaces:
-            for iface_port in list(pit_ifaces):
-                try:
-                    self.sock.sendto(packet, ("127.0.0.1", int(iface_port)))
-                    self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to PIT iface port {iface_port}")
-                except Exception as e:
-                    self.log(f"[{self.name}] Error forwarding ROUTE DATA to PIT iface {iface_port}: {e}")
-            return
-
-        # No PIT entries — try to forward to the origin directly if we know its port
-        if origin_name:
-            origin_port = self.name_to_port.get(origin_name)
-            if origin_port:
-                try:
-                    self.sock.sendto(packet, ("127.0.0.1", int(origin_port)))
-                    self.log(f"[{self.name}] No PIT for {dest_name}; forwarded ROUTE DATA directly to origin {origin_name} at port {origin_port}")
-                    return
-                except Exception as e:
-                    self.log(f"[{self.name}] Failed to forward ROUTE DATA to origin {origin_name}: {e}")
-
-        # Nothing to do - drop and log
-        self.log(f"[{self.name}] DROPPED ROUTE DATA for {dest_name}: no PIT and unknown origin {origin_name}")
-
-        try:
-            parsed = parse_route_data_packet(packet)
-            # Basic route fields
-            dest = parsed.get("Dest")
-            next_hop = parsed.get("NextHop")
-            next_hop_port = parsed.get("NextHopPort")
-            self.log(f"ROUTE_RX from {addr} name={parsed.get('Name')} dest={dest} next_hop={next_hop} next_hop_port={next_hop_port}")
-
-            # Check resolvability: name_to_port maps node_name -> port
-            resolvable = False
-            reason = []
-            if next_hop_port is not None:
-                try:
-                    nhp_int = int(next_hop_port)
-                    if nhp_int in set(self.name_to_port.values()):
-                        resolvable = True
-                        reason.append("next_hop_port found in name_to_port.values()")
-                except Exception:
-                    reason.append("next_hop_port not int")
-            if next_hop:
-                if next_hop in self.name_to_port:
-                    resolvable = True
-                    reason.append("next_hop found in name_to_port keys")
-            self.log(f"ROUTE_DEBUG resolvable={resolvable} reason={reason} name_to_port_keys={list(self.name_to_port.keys())} name_to_port_values={list(self.name_to_port.values())[:10]}")
-
-            # Dump buffer destinations for comparison
+        # Otherwise: we must forward this ROUTE_DATA upstream toward the origin
+        next_hop_name = None
+        # Prefer path_to_origin given by NS (path from NS -> origin)
+        if path_to_origin:
             try:
-                buf_snapshot = list(self.buffer)
-                self.log(f"BUFFER_SNAPSHOT count={len(buf_snapshot)}")
-                for i, entry in enumerate(buf_snapshot):
-                    # normalize possible keys
-                    entry_dest = entry.get("dest") or entry.get("Name") or entry.get("destination") or entry.get("Destination")
-                    entry_status = entry.get("status")
-                    entry_origin = entry.get("origin") or entry.get("OriginNode")
-                    self.log(f"BUFFER[{i}] dest={entry_dest} status={entry_status} origin={entry_origin}")
-                    # exact-match check against route dest
-                    if dest is not None and entry_dest == dest:
-                        self.log(f"BUFFER_MATCH found index={i} entry_dest==route_dest ({dest})")
-                        # (existing code should mark resolved / forward — ensure it uses exact match)
-                # continue normal handling...
-            except Exception as e:
-                self.log(f"BUFFER_DUMP_EXC: {e}")
-        except Exception as e:
-            self.log(f"_handle_route_data EXC: {e}")
+                # find this node in the path_to_origin, then choose the next element toward the origin
+                if self.name in path_to_origin:
+                    idx = path_to_origin.index(self.name)
+                    if idx < len(path_to_origin) - 1:
+                        next_hop_name = path_to_origin[idx + 1]
+                else:
+                    # if node not present, but NS included itself and we are a neighbor, try to find best candidate
+                    # fallback: use first element after NS if that is a neighbor of this node
+                    if len(path_to_origin) > 1:
+                        fallback_candidate = path_to_origin[1]
+                        next_hop_name = fallback_candidate
+            except Exception:
+                next_hop_name = None
+
+        # If path_to_origin did not yield a next hop, try NextHop field
+        if not next_hop_name and next_hop_field:
+            next_hop_name = next_hop_field
+
+        # If still unknown, as final fallback, try to forward to origin_name directly
+        if not next_hop_name:
+            next_hop_name = origin_name
+
+        # Resolve port
+        if next_hop_name:
+            port, resolved_name = self._resolve_port_by_name(next_hop_name)
+            if port:
+                try:
+                    # Avoid sending to our own port (prevents self-loop)
+                    if int(port) == int(self.port):
+                        self.log(f"[{self.name}] Next hop resolved to own port ({port}); dropping forward to avoid loop")
+                    else:
+                        self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                        self.log(f"[{self.name}] Forwarded ROUTE_DATA to {resolved_name} (port {port})")
+                except Exception as e:
+                    self.log(f"[{self.name}] Error forwarding ROUTE_DATA to {resolved_name}:{port} - {e}")
+            else:
+                # couldn't resolve: heavy debug output to help root cause
+                self.log(f"[{self.name}] Cannot resolve port for next_hop_name='{next_hop_name}'. Dumping routing state:")
+                self.dump_routing_state()
+                return
+
+        # If we reach here nothing could be done
+        self.log(f"[{self.name}] DROPPED ROUTE DATA for {dest}: no next_hop determined")
+        self.dump_routing_state()
+        return
 
     def _listen_broadcast(self):
         while self.running:
@@ -813,11 +857,14 @@ class Node:
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(4096)
+                # Log arrival first (so arrival line appears before any processing output),
+                # then hand off to the processing pipeline.
+                print(f"[{self.name}] Received packet from {addr}")
+                # Directly hand off to the processing pipeline
                 self.receive_packet(data, addr)
+                # If you want to enqueue first, uncomment below and move receive out to the buffer loop:
                 # with self.buffer_lock:
-                    # Add raw packet to buffer first
-                    #self.buffer.append((data, addr))
-                #print(f"[{self.name}] Received packet from {addr}, added to buffer (size={len(self.buffer)})")
+                # self.buffer.append({"packet": data, "addr": addr, "destination": None, "status": "waiting"})
             except Exception as e:
                 print(f"[{self.name}] Listener error: {e}")
                 break
@@ -893,8 +940,8 @@ class Node:
                                             pass
                                     continue
                                 elif entry_status != "resolved":
-                                    self.buffer.remove(entry)
                                     self.receive_packet(entry["packet"], entry["addr"])
+                                    self.buffer.remove(entry)
                             except Exception as e:
                                 self.log(f"BUFFER_ENTRY_PROC_EXC: {e}")
                 # sleep a bit
@@ -903,12 +950,124 @@ class Node:
                 self.log(f"_process_buffer_loop EXC: {e}")
 
     def send_interest(self, seq_num, name, flags=0x0, target=("127.0.0.1", 0), data_flag=True):
-        pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=data_flag)
-        self.sock.sendto(pkt, target)
-        print(f"[{self.name}] Sent INTEREST packet to {target} (data_flag={data_flag})")
-        self.log(f"[{self.name}] Sent INTEREST packet to {target} (data_flag={data_flag})")
-        self.add_to_buffer(pkt, target, reason="Originated Interest")
-        return pkt
+        # Originating-interest behavior:
+        # 1) If this node already has a FIB entry for the requested name, create a REAL_INTEREST
+        #    (data_flag=True) and forward it directly to the FIB next hop.
+        # 2) Otherwise, create an NS QUERY (data_flag=False) and send it toward the NameServer
+        #    (preferably via a first-hop neighbor). In that case buffer the original interest so
+        #    it can be converted to a real interest once a route is returned.
+
+        # Useful debug: show intent
+        print(f"[{self.name}] Initiating Interest for '{name}' (seq={seq_num}) origin={self.name}")
+        self.log(f"Initiating Interest for '{name}' (seq={seq_num}) origin={self.name}")
+
+        # Check routing tables for an immediate FIB hit
+        table, data = self.check_tables(name)
+        if table == "FIB" and data:
+            # Resolve next-hop port (entry may contain int or a name)
+            nh = data.get("NextHops")
+            target_port = None
+            try:
+                # direct integer
+                target_port = int(nh)
+            except Exception:
+                # lookup by name (aliases)
+                if isinstance(nh, str) and nh in self.name_to_port:
+                    try:
+                        target_port = int(self.name_to_port[nh])
+                    except Exception:
+                        target_port = None
+
+            if target_port:
+                # Create and send a REAL_INTEREST directly
+                real_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=True)
+                try:
+                    self.sock.sendto(real_pkt, (self.host, target_port))
+                    print(f"[{self.name}] FIB HIT: Created REAL_INTEREST (seq={seq_num}) for '{name}' -> next_hop port {target_port}")
+                    self.log(f"FIB HIT: REAL_INTEREST seq={seq_num} '{name}' -> port {target_port}")
+                    # record PIT entry locally so DATA can be forwarded back (origin is self)
+                    if name not in self.pit:
+                        self.pit[name] = [target_port]
+                        print(f"[{self.name}] Added PIT entry for '{name}' with interface [{target_port}]")
+                        self.log(f"Added PIT entry for '{name}' with interface [{target_port}]")
+                except Exception as e:
+                    print(f"[{self.name}] ERROR sending REAL_INTEREST to port {target_port}: {e}")
+                    self.log(f"ERROR sending REAL_INTEREST to port {target_port}: {e}")
+                return real_pkt
+
+        # No FIB hit → send NS QUERY (data_flag=False)
+        # Build query packet (origin=self.name) — the driver/other callers might pass target NS port but
+        # try to avoid sending directly to NS by choosing a first-hop neighbor if known.
+        query_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=False)
+
+        # Resolve whether the provided `target` looks like a NameServer port we know
+        resolved_target = target
+        try:
+            if target and isinstance(target, (list, tuple)) and int(target[1]) != 0:
+                ns_names = [n for n, p in self.name_to_port.items() if "NameServer" in n and int(p) == int(target[1])]
+            else:
+                ns_names = []
+        except Exception:
+            ns_names = []
+
+        if ns_names:
+            # prefer a neighbor first-hop toward the NS (neighbor_table keys map to names)
+            first_hop_port = None
+            first_hop_name = None
+            for nbr in list(self.neighbor_table.keys()):
+                p = self.name_to_port.get(nbr)
+                if p and int(p) != int(target[1]):
+                    first_hop_port = int(p)
+                    first_hop_name = nbr
+                    break
+            # fallback: any known non-NS port
+            if not first_hop_port:
+                for n, p in self.name_to_port.items():
+                    try:
+                        if int(p) != int(target[1]):
+                            first_hop_port = int(p)
+                            first_hop_name = n
+                            break
+                    except Exception:
+                        continue
+            if first_hop_port:
+                resolved_target = (self.host, first_hop_port)
+                print(f"[{self.name}] NS QUERY: redirecting toward first-hop {first_hop_name} (port {first_hop_port}) instead of NS port {target[1]}")
+                self.log(f"NS QUERY redirect -> first-hop {first_hop_name} port {first_hop_port}")
+
+        # Send the query toward the resolved target (first-hop or NS fallback)
+        try:
+            # Record a PIT entry for this originated interest so that when DATA/ROUTE replies
+            # arrive they can be forwarded toward the interface we used to send the query.
+            try:
+                pit_iface = None
+                if isinstance(resolved_target, (list, tuple)) and int(resolved_target[1]) != 0:
+                    pit_iface = int(resolved_target[1])
+                elif isinstance(resolved_target, int):
+                    pit_iface = int(resolved_target)
+                if pit_iface:
+                    if name not in self.pit:
+                        self.pit[name] = [pit_iface]
+                        print(f"[{self.name}] Added PIT entry for '{name}' with interface [{pit_iface}]")
+                        self.log(f"Added PIT entry for '{name}' with interface [{pit_iface}]")
+                    else:
+                        if pit_iface not in self.pit[name]:
+                            self.pit[name].append(pit_iface)
+                            print(f"[{self.name}] Updated PIT for '{name}' with interface {pit_iface}")
+                            self.log(f"Updated PIT for '{name}' with interface {pit_iface}")
+            except Exception as _e:
+                self.log(f"[{self.name}] Failed to add PIT entry for originated interest {name}: {_e}")
+
+            self.add_to_buffer(query_pkt, resolved_target, reason="Originated Interest (NS query)")
+            self.log(f"Buffered originated interest for '{name}' -> {resolved_target}")
+            self.sock.sendto(query_pkt, resolved_target)
+            print(f"[{self.name}] Sent NS QUERY (seq={seq_num}) for '{name}' to {resolved_target} (data_flag=False)")
+            self.log(f"Sent NS QUERY seq={seq_num} '{name}' -> {resolved_target}")
+        except Exception as e:
+            print(f"[{self.name}] ERROR sending NS QUERY to {resolved_target}: {e}")
+            self.log(f"ERROR sending NS QUERY to {resolved_target}: {e}")
+
+        return query_pkt
 
     def send_data(self, seq_num, name, payload, flags=0x0, target=("127.0.0.1", 0)):
         payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
@@ -1003,7 +1162,7 @@ class Node:
                     ns_port = fib_entry["NextHops"]
                     try:
                         # Create and send an update packet to inform NS of active neighbor
-                        update_pkt = create_neighbor_update_packet(neighbor_name, self.name)
+                        update_pkt = create_neighbor_update_packet(self.name, neighbor_name)
                         self.sock.sendto(update_pkt, ("127.0.0.1", int(ns_port)))
 
                         msg = (f"[{self.name}] Sent topology UPDATE to {ns_name} "
@@ -1030,8 +1189,18 @@ class Node:
         packet_type = (packet[0] >> 4) & 0xF
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
+        # convenience: is this packet arriving from a known NameServer port?
+        from_ns = False
+        try:
+            if addr is not None and self._is_ns_port(addr[1]):
+                from_ns = True
+        except Exception:
+            from_ns = False
+
         if packet_type == INTEREST:
             parsed = parse_interest_packet(packet)
+            # preserve the raw name as parsed from the packet (use this for ns query bookkeeping)
+            raw_interest_name = parsed.get("Name")
             is_real_interest = parsed["DataFlag"]
             origin_node = parsed["OriginNode"]
             node_name = parsed.get("NodeName")
@@ -1043,86 +1212,271 @@ class Node:
             # Nodes must not send encapsulated queries to their own NameServer; instead
             # forward encapsulated packet toward the border alias. When the border node
             # itself receives the ENCAP packet it strips it and continues normal processing.
-            enc_name = None
+            enc_layers = []
             enc_border = None
-            if isinstance(parsed.get("Name"), str) and parsed["Name"].startswith("ENCAP:"):
+            enc_name = None
+
+            raw_name = parsed.get("Name", "")
+
+            if isinstance(raw_name, str) and raw_name.startswith("ENCAP:"):
                 try:
-                    rest = parsed["Name"][6:]
-                    enc_border, enc_name = rest.split("|", 1)
-                    enc_border = enc_border.strip()
-                    enc_name = enc_name.strip()
+                    # remove leading "ENCAP:" and split to layers
+                    parts = [p.strip() for p in raw_name[6:].split("|")]
+
+                    if len(parts) >= 2:
+                        enc_layers = parts[:-1]          # all except last
+                        enc_name = parts[-1]             # last = destination
+                        if len(parts) >= 2:
+                            enc_border = parts[-2]       # second to last = current border hop
                 except Exception:
+                    enc_layers = []
                     enc_border = None
                     enc_name = None
+
+            # If ENCAP exists, override dest_name
+            if enc_name:
+                dest_name = enc_name
 
             if enc_border:
                 # If this node is the border (one of its aliases), strip encapsulation and
                 # treat the Interest as if its Name is the original target.
-                if enc_border in self.name.split():
-                    parsed["Name"] = enc_name
+                if any(enc_border_part in self.name for enc_border_part in enc_border.split()):
+                    #parsed["Name"] = enc_name
                     packet = create_interest_packet(parsed["SequenceNumber"], enc_name, parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=False)
                     is_real_interest = False
+                    
+                    # Record the ENCAP origin port for ack_only, so we can send ROUTE_ACK back when route is resolved
+                    try:
+                        # Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
+                        key = enc_name if enc_name else parsed.get("Name")
+                        if key:
+                            self.ns_query_table.setdefault(key, [])
+                            exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
+                            if not exists:
+                                if not self._is_ns_port(addr[1]):
+                                    self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                                else:
+                                    self.log(f"[{self.name}] Ignored registering ack-only NS query for {key} from NS port {addr[1]}")
+                    except Exception:
+                        pass
+                    
+                    # --- Border router forwarding logic ---
+                    # If this is a border node (has multiple domain aliases)
+                    # and the encapsulated query came from another domain,
+                    # forward the query to the NameServer of the *other* domain.
+                    if " " in self.name:
+                        # Border router with two domain identities
+                        domain_parts = [d for d in self.name.split(" ") if d.strip()]
+
+                        if len(domain_parts) >= 2:
+                            left_domain = domain_parts[0].split("/")[1]
+                            right_domain = domain_parts[1].split("/")[1]
+
+                            # Extract visited domains from the interest packet
+                            visited = set(parsed.get("VisitedDomains", []))
+
+                            # Determine which domain has NOT been visited
+                            unvisited_domains = []
+                            if left_domain not in visited:
+                                unvisited_domains.append(left_domain)
+                            if right_domain not in visited:
+                                unvisited_domains.append(right_domain)
+
+                            # -----------------------------
+                            # DECISION: which NS to contact?
+                            # -----------------------------
+                            if len(unvisited_domains) == 1:
+                                # Perfect case: exactly one unvisited domain → forward to that NS
+                                target_domain = unvisited_domains[0]
+
+                            elif len(unvisited_domains) == 2:
+                                # Neither visited yet → choose domain based on origin proximity
+                                origin_domain = origin_node.split("/")[1] if "/" in origin_node else None
+                                if origin_domain == left_domain:
+                                    target_domain = right_domain
+                                else:
+                                    target_domain = left_domain
+
+                            else:
+                                # Both domains fully visited → prevent loop
+                                print(f"[{self.name}] Both domains already visited ({visited}). Not querying any NS.")
+                                return
+
+                            target_ns = f"/{target_domain}/NameServer1"
+                            ns_port = self.name_to_port.get(target_ns)
+
+                            # ---------------------------------------------------------
+                            # 1) If we know the NS port already → forward INTERDOMAIN
+                            # ---------------------------------------------------------
+                            if ns_port:
+                                try:
+                                    forward_pkt = create_interest_packet(
+                                        parsed["SequenceNumber"],
+                                        parsed["Name"],
+                                        0x1,  # INTERDOMAIN flag
+                                        origin_node=self.name,
+                                        data_flag=False,
+                                        visited_domains=list(visited)  # <-- keep visited domains
+                                    )
+                                    
+                                    try:
+                                        full_key = parsed.get("Name")
+                                        if full_key:
+                                            self.ns_query_table.setdefault(full_key, [])
+                                            exists = any(item.get("port") == addr[1] for item in self.ns_query_table[full_key])
+                                            if not exists:
+                                                self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
+                                                self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                                print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                                print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
+                                    except Exception as e:
+                                        self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
+
+                                    self.sock.sendto(forward_pkt, ("127.0.0.1", int(ns_port)))
+                                    print(f"[{self.name}] Forwarded interdomain interest for {parsed['Name']} → {target_ns} (port {ns_port})")
+                                    self.log(f"[{self.name}] Forwarded interdomain interest → {target_ns} with visited={visited}")
+
+                                except Exception as e:
+                                    print(f"[{self.name}] Failed forwarding to {target_ns}: {e}")
+                                    self.log(f"[{self.name}] Failed forwarding to {target_ns}: {e}")
+
+                                return
+
+                            # ---------------------------------------------------------
+                            # 2) If we do NOT know the NS port → ask our own NS
+                            # ---------------------------------------------------------
+                            # Which domain is "ours"? The domain that matches origin
+                            origin_domain = origin_node.split("/")[1] if "/" in origin_node else None
+                            own_domain = left_domain if origin_domain == left_domain else right_domain
+                            own_ns = f"/{own_domain}/NameServer1"
+
+                            own_ns_port = self.name_to_port.get(own_ns)
+                            if own_ns_port:
+                                try:
+                                    # Ask our own NS for the route to the target NS
+                                    query_pkt = create_interest_packet(
+                                        parsed["SequenceNumber"],
+                                        target_ns,
+                                        parsed["Flags"],
+                                        origin_node=self.name,
+                                        data_flag=False,
+                                        visited_domains=list(visited)
+                                    )
+
+                                    self.sock.sendto(query_pkt, ("127.0.0.1", int(own_ns_port)))
+                                    print(f"[{self.name}] Asked own NS {own_ns} for location of {target_ns}")
+                                    self.log(f"[{self.name}] Asked own NS {own_ns} for target NS {target_ns}")
+
+                                except Exception as e:
+                                    print(f"[{self.name}] ERROR asking own NS {own_ns} for route to {target_ns}: {e}")
+                                    self.log(f"[{self.name}] ERROR asking own NS {own_ns}: {e}")
+                            return
+                        
+                # Try to forward directly if we already know the border port (HELLO/FIB)
+                target_port = None
+                if enc_border in self.name_to_port:
+                    target_port = int(self.name_to_port[enc_border])
                 else:
-                    # Try to forward directly if we already know the border port (HELLO/FIB)
-                    target_port = None
-                    if enc_border in self.name_to_port:
-                        target_port = int(self.name_to_port[enc_border])
-                    else:
-                        fib_entry = self.fib.get(enc_border)
-                        if fib_entry:
-                            try:
-                                target_port = int(fib_entry["NextHops"])
-                            except Exception:
-                                target_port = None
-                    if target_port:
+                    fib_entry = self.fib.get(enc_border)
+                    if fib_entry:
                         try:
+                            target_port = int(fib_entry["NextHops"])
+                        except Exception:
+                            target_port = None
+                if target_port:
+                    try:
+                        if parsed["Flags"] != 0x1:
                             self.sock.sendto(packet, ("127.0.0.1", target_port))
                             self.log(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
                             print(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
+                            #self.ns_query_table[parsed["Name"]].append({"port": addr[1], "ack_only": False})
                             return
-                        except Exception as e:
-                            self.log(f"[{self.name}] Error forwarding ENCAP to {enc_border}:{target_port} - {e}")
+                    except Exception as e:
+                        self.log(f"[{self.name}] Error forwarding ENCAP to {enc_border}:{target_port} - {e}")
 
-                    # No direct route: ask our NameServer for the border alias, and buffer the ENCAP packet.
-                    # Determine local domain NameServer
+                if parsed["Flags"] == 0x1:
                     own_domain = self.domains[0] if self.domains else None
                     if own_domain:
                         ns_name = f"/{own_domain}/NameServer1"
-                        ns_port = None
-                        fib_entry = self.fib.get(ns_name)
-                        if fib_entry:
-                            ns_port = fib_entry["NextHops"]
-                        else:
-                            ns_port = self.name_to_port.get(ns_name)
-
-                        # Buffer the encapsulated packet so it can be forwarded when route known
-                        self.add_to_buffer(packet, addr, reason=f"No route to border {enc_border} for ENCAP query (will ask NS)")
-
+                        ns_port = self.name_to_port.get(ns_name)
                         if ns_port:
-                            # Send a separate query to local NameServer asking for the border alias
                             try:
-                                # Query name = enc_border (we want NS to resolve that node)
-                                query_pkt = create_interest_packet(parsed["SequenceNumber"], enc_border, parsed["Flags"], origin_node=self.name, data_flag=False)
-                                self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
-                                self.log(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
-                                print(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
-                                # mark buffered entries as having been forwarded to NS so we don't duplicate
-                                with self.buffer_lock:
-                                    if self.buffer:
-                                        # mark newest matching buffer entries
-                                        for entry in reversed(self.buffer):
-                                            if entry.get("destination") == parsed.get("Name") or entry.get("destination") == enc_name:
-                                                entry["forwarded_to_ns"] = True
-                                                break
+                                try:
+                                    full_key = parsed.get("Name")
+                                    if full_key:
+                                        self.ns_query_table.setdefault(full_key, [])
+                                        exists = any(item.get("port") == addr[1] for item in self.ns_query_table[full_key])
+                                        if not exists:
+                                            self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
+                                            self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                            print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                            print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
+                                except Exception as e:
+                                    self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
+                                self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
+                                self.log(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
+                                print(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
+                                return
                             except Exception as e:
-                                self.log(f"[{self.name}] Error sending NS query for border {enc_border} to {ns_name}:{ns_port} - {e}")
-                                # leave packet buffered and return
-                        return
-                    # No NS info: buffer and wait (as fallback)
-                    #self.add_to_buffer(packet, addr, reason=f"No NS to query for border {enc_border} for ENCAP query")
+                                self.log(f"[{self.name}] Error routing INTEREST with 0x1 flag to local NameServer {ns_name}:{ns_port} - {e}")
+                    # If no local NameServer info, buffer the packet
+                    self.add_to_buffer(packet, addr, reason="No local NameServer info for INTEREST with 0x1 flag")
                     return
-            # --- end encapsulation handling
+                
+                # No direct route: ask our NameServer for the border alias, and buffer the ENCAP packet.
+                # Determine local domain NameServer
+                own_domain = self.domains[0] if self.domains else None
+                if own_domain:
+                    ns_name = f"/{own_domain}/NameServer1"
+                    ns_port = None
+                    fib_entry = self.fib.get(ns_name)
+                    if fib_entry:
+                        ns_port = fib_entry["NextHops"]
+                    else:
+                        ns_port = self.name_to_port.get(ns_name)
 
+                    # Buffer the encapsulated packet so it can be forwarded when route known
+                    self.add_to_buffer(packet, addr, reason=f"No route to border {enc_border} for ENCAP query (will ask NS)")
+
+                    if ns_port:
+                        # Send a separate query to local NameServer asking for the border alias
+                        try:
+                            # Query name = enc_border (we want NS to resolve that node)
+                            query_pkt = create_interest_packet(parsed["SequenceNumber"], enc_border, parsed["Flags"], origin_node=self.name, data_flag=False)
+                            self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
+                            self.log(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                            print(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                    
+                            try:
+                                # CHANGED: Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
+                                key = enc_name if enc_name else parsed.get("Name")
+                                if key:
+                                    self.ns_query_table.setdefault(key, [])
+                                    exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
+                                    if not exists:
+                                        if not self._is_ns_port(addr[1]):
+                                            self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                                            self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                        else:
+                                            self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
+                            except Exception:
+                                pass
+                            
+                            # mark buffered entries as having been forwarded to NS so we don't duplicate
+                            with self.buffer_lock:
+                                if self.buffer:
+                                    # mark newest matching buffer entries
+                                    for entry in reversed(self.buffer):
+                                        if entry.get("destination") == parsed.get("Name") or entry.get("destination") == enc_name:
+                                            entry["forwarded_to_ns"] = True
+                                            break
+                        except Exception as e:
+                            self.log(f"[{self.name}] Error sending NS query for border {enc_border} to {ns_name}:{ns_port} - {e}")
+                            # leave packet buffered and return
+                    return
+                # No NS info: buffer and wait (as fallback)
+                self.add_to_buffer(packet, addr, reason=f"No NS to query for border {enc_border} for ENCAP query")
+                return
 
             pkt_obj = InterestPacket(
                 seq_num=parsed["SequenceNumber"],
@@ -1237,19 +1591,66 @@ class Node:
 
             # If this is a query to the NameServer (data_flag == False)
             if not is_real_interest:
-                # If the packet originated here, we already added it to PIT above.
-                # Routers that receive data=False should NOT rewrite the origin; they should forward
-                # the same packet toward the domain NameServer.
-                # Record the incoming interface so we can forward the NS ROUTE reply back here.
-                # This fixes the case where an intermediate router (e.g. /DLSU/Henry) forwarded
-                # the query to the NameServer but didn't know how to route the NS reply back.
-                try:
-                    self.ns_query_table.setdefault(parsed["Name"], [])
-                    if addr[1] not in self.ns_query_table[parsed["Name"]]:
-                        self.ns_query_table[parsed["Name"]].append(addr[1])
-                        self.log(f"[{self.name}] Recorded NS query origin iface {addr[1]} for {parsed['Name']}")
-                except Exception:
+                # Registering "ns_query_table" entries must NOT record NameServer ports.
+                # If this packet came from a NameServer port, skip creating requester-face entries.
+                if from_ns:
+                    self.log(f"[{self.name}] Ignoring ns_query_table registration for query '{raw_interest_name}' arriving from NS port {addr[1]}")
+                else:
+                    # existing code path will register ns_query_table entries — ensure it uses the guarded helper (below)
                     pass
+
+                # --- Ensure an NS-query "PIT" is created for ENCAP and related name forms ---
+                # Record multiple keys so ROUTE_ACK (which may carry either the full ENCAP
+                # name or the inner original name) finds the correct incoming iface.
+                try:
+                    port = addr[1] if addr else None
+                    if port is not None:
+                        def _add_ns_query_key(k):
+                            if not k:
+                                return
+                            lst = self.ns_query_table.setdefault(k, [])
+                            if not any(item.get("port") == port for item in lst):
+                                if not self._is_ns_port(port):
+                                    lst.append({"port": port, "ack_only": bool(parsed.get("Flags", 0) & ACK_FLAG)})
+                                    self.log(f"[{self.name}] ns_query_table[{k}] add iface {port}")
+                                    print(f"[{self.name}] ns_query_table[{k}] add iface {port}")
+                                else:
+                                    self.log(f"[{self.name}] Ignored registering NS-query key {k} for NS port {port}")
+
+                        # add full key exactly as received
+                        _add_ns_query_key(raw_interest_name)
+
+                        # If ENCAP form, also index the inner name and border alias forms
+                        if isinstance(raw_interest_name, str) and raw_interest_name.startswith("ENCAP:"):
+                            try:
+                                rest = raw_interest_name[6:]
+                                border_alias, inner_name = rest.split("|", 1)
+                                border_alias = border_alias.strip()
+                                inner_name = inner_name.strip()
+                                _add_ns_query_key(inner_name)          # inner original name
+                                _add_ns_query_key(border_alias + "|" + inner_name)  # normalized encap fragment
+                            except Exception:
+                                pass
+                except Exception as e:
+                    self.log(f"[{self.name}] Error recording NS-query PIT: {e}")
+
+                # --- Record NS-query PIT entry for ENCAP or regular NS queries ---
+                # When an ENCAP query traverses this node (or any NS-query arrives),
+                # record the incoming interface under the exact packet name so that
+                # future ROUTE_ACKs can be forwarded along the reverse path.
+                try:
+                    key = raw_interest_name  # exact packet name as received (preserves ENCAP wrapper)
+                    if key:
+                        self.ns_query_table.setdefault(key, [])
+                        # avoid duplicate same-port entries
+                        if not any(item.get("port") == addr[1] for item in self.ns_query_table[key]):
+                            if not self._is_ns_port(addr[1]):
+                                self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                            else:
+                                self.log(f"[{self.name}] Ignored registering NS-query PIT key {key} from NS port {addr[1]}")
+                except Exception as e:
+                    self.log(f"[{self.name}] Error recording NS-query PIT: {e}")
+
 
                 own_domain = self.domains[0] if self.domains else None
                 if own_domain:
@@ -1258,12 +1659,9 @@ class Node:
                     if fib_entry:
                         ns_port = fib_entry["NextHops"]
                         try:
-                            # forward unchanged to the name server
                             self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
-                            print(f"[{self.name}] Forwarded NS QUERY for {parsed['Name']} -> {ns_name} (via port {ns_port}) origin={origin_node}")
                             self.log(f"[{self.name}] Forwarded NS QUERY for {parsed['Name']} -> {ns_name} (via port {ns_port}) origin={origin_node}")
                         except Exception as e:
-                            print(f"[{self.name}] Error forwarding NS query to {ns_name}: {e}")
                             self.log(f"[{self.name}] Error forwarding NS query to {ns_name}: {e}")
                         return
                     
@@ -1382,41 +1780,134 @@ class Node:
                             already_asked_ns = entry.get("forwarded_to_ns", False)
                             break
                 if not already_asked_ns:
-                    # Always send to own domain's NameServer, regardless of interest's domain
+                    # -----------------------------------------------------------
+                    # If NOT a border router → use existing behavior
+                    # -----------------------------------------------------------
                     own_domain = self.domains[0] if self.domains else None
-                    if own_domain:
+                    if own_domain and not self.isborder:
                         ns_name = f"/{own_domain}/NameServer1"
-                        # try FIB entry for that domain's NameServer, or direct mapping if known
                         fib_entry = self.fib.get(ns_name)
-                        ns_port = None
-                        if fib_entry:
-                            ns_port = fib_entry["NextHops"]
-                        else:
-                            # fallback to known port from HELLOs/UPDATEs
-                            ns_port = self.name_to_port.get(ns_name)
+                        ns_port = fib_entry["NextHops"] if fib_entry else self.name_to_port.get(ns_name)
+
                         if ns_port:
                             try:
-                                # create a query packet (data=False) where this router is origin
-                                query_pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=self.name, data_flag=False)
+                                query_pkt = create_interest_packet(
+                                    parsed["SequenceNumber"], parsed["Name"], parsed["Flags"],
+                                    origin_node=self.name, data_flag=False
+                                )
                                 self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
-                                print(f"[{self.name}] Sent NS QUERY for {parsed['Name']} (origin={self.name}) -> {ns_name} via port {ns_port}")
-                                self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} (origin={self.name}) -> {ns_name} via port {ns_port}")
-                                # mark buffered entries as forwarded to NS (do NOT modify buffered packet origin)
+                                print(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
+                                self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
+                                # mark buffered
                                 with self.buffer_lock:
                                     for entry in self.buffer:
                                         if entry.get("destination") == parsed["Name"]:
                                             entry["forwarded_to_ns"] = True
                             except Exception as e:
-                                print(f"[{self.name}] Error forwarding INTEREST query to NS via port {ns_port}: {e}")
-                                self.log(f"[{self.name}] Error forwarding INTEREST query to NS via port {ns_port}: {e}")
+                                print(f"[{self.name}] Error forwarding INTEREST query to NS: {e}")
                         else:
-                            print(f"[{self.name}] No route to NameServer {ns_name} (no FIB entry or known port). Will keep buffered.")
-                            self.log(f"[{self.name}] No route to NameServer {ns_name} (no FIB entry or known port). Will keep buffered.")
-                return  # buffered unknown routes for real interest
+                            print(f"[{self.name}] No route to NameServer {ns_name}")
+                        return
+
+                    # -----------------------------------------------------------
+                    # Border router logic (self.isborder == True)
+                    # -----------------------------------------------------------
+                    if self.isborder:
+                        # Example: /DLSU/Router1 /ADMU/Router1
+                        # Determine target domain based on the Interest name
+                        interest_full = parsed["Name"].lstrip("/")
+                        parts = interest_full.split("/")
+                        target_domain = parts[0] if parts else None
+
+                        # Determine border router's two domains
+                        # e.g. ["DLSU", "ADMU"]
+                        border_domains = []
+                        for alias in self.name.split():
+                            alias = alias.strip("/")
+                            segs = alias.split("/")
+                            if segs and len(segs) > 1:
+                                border_domains.append(segs[0])
+
+                        border_domains = list(set(border_domains))
+                        # example: border_domains = ["DLSU", "ADMU"]
+
+                        # Last domain visited = domain of the node that sent packet to this router
+                        last_domain = None
+                        if parsed["OriginNode"] and "/" in parsed["OriginNode"]:
+                            last_domain = parsed["OriginNode"].split("/")[1]
+
+                        # -------------------------------------------------------
+                        # 1. If target domain has a known NS → send to that NS
+                        # -------------------------------------------------------
+                        if target_domain:
+                            target_ns = f"/{target_domain}/NameServer1"
+                            target_ns_port = self.name_to_port.get(target_ns)
+
+                            if target_ns_port:
+                                try:
+                                    pkt = create_interest_packet(
+                                        parsed["SequenceNumber"],
+                                        parsed["Name"],
+                                        parsed["Flags"],
+                                        origin_node=self.name,
+                                        data_flag=False
+                                    )
+                                    self.sock.sendto(pkt, ("127.0.0.1", int(target_ns_port)))
+                                    print(f"[{self.name}] BORDER NS QUERY → {target_ns} for {parsed['Name']}")
+                                    self.log(f"[{self.name}] BORDER NS QUERY → {target_ns} for {parsed['Name']}")
+                                    # mark buffered
+                                    with self.buffer_lock:
+                                        for entry in self.buffer:
+                                            if entry.get("destination") == parsed["Name"]:
+                                                entry["forwarded_to_ns"] = True
+                                except Exception as e:
+                                    print(f"[{self.name}] Border NS query failed: {e}")
+                                return
+
+                        # -------------------------------------------------------
+                        # 2. If no target domain match, send to the NS we HAVEN'T visited
+                        # -------------------------------------------------------
+                        alt_domain = None
+                        for dom in border_domains:
+                            if dom != last_domain:  # choose the domain not visited
+                                alt_domain = dom
+                                break
+
+                        if alt_domain:
+                            alt_ns = f"/{alt_domain}/NameServer1"
+                            alt_ns_port = self.name_to_port.get(alt_ns)
+                            if alt_ns_port:
+                                try:
+                                    pkt = create_interest_packet(
+                                        parsed["SequenceNumber"],
+                                        parsed["Name"],
+                                        parsed["Flags"],
+                                        origin_node=self.name,
+                                        data_flag=False
+                                    )
+                                    self.sock.sendto(pkt, ("127.0.0.1", int(alt_ns_port)))
+                                    print(f"[{self.name}] BORDER NS QUERY (fallback) → {alt_ns} for {parsed['Name']}")
+                                    self.log(f"[{self.name}] BORDER NS QUERY (fallback) → {alt_ns} for {parsed['Name']}")
+                                    # mark buffered
+                                    with self.buffer_lock:
+                                        for entry in self.buffer:
+                                            if entry.get("destination") == parsed["Name"]:
+                                                entry["forwarded_to_ns"] = True
+                                except Exception as e:
+                                    print(f"[{self.name}] Border NS fallback query failed: {e}")
+                                return
+
+                        # -------------------------------------------------------
+                        # 3. No NS found → keep buffered
+                        # -------------------------------------------------------
+                        print(f"[{self.name}] BORDER: No suitable NS found for {parsed['Name']}")
+                        self.log(f"[{self.name}] BORDER: No suitable NS found for {parsed['Name']}")
+                        return
 
             if table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.log(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
+                self.remove_pit(pkt_obj.name, addr[1])
                 self.send_data(
                     seq_num=pkt_obj.seq_num,
                     name=pkt_obj.name,
@@ -1424,7 +1915,6 @@ class Node:
                     flags=ACK_FLAG,
                     target=addr
                 )
-                self.remove_pit(pkt_obj.name, addr[1])
             elif table == "FIB":
                 next_hop = data["NextHops"]
                 print(f"[{self.name}] Forwarding INTEREST for {parsed['Name']} via FIB to next hop port: {next_hop}")
@@ -1522,10 +2012,22 @@ class Node:
                     if name in self.pit:
                         interfaces = list(self.pit[name])
                         for interface in interfaces:
+                            # Skip forwarding back to the interface that sent this DATA (avoid loop/duplicate)
+                            try:
+                                incoming_port = addr[1] if addr else None
+                            except Exception:
+                                incoming_port = None
+
+                            if incoming_port is not None and int(interface) == int(incoming_port):
+                                # remove the PIT entry but do not forward to the sender
+                                self.remove_pit(name, interface)
+                                self.log(f"[{self.name}] Skipped forwarding reassembled DATA back to incoming iface {interface}")
+                                continue
+
+                            self.remove_pit(name, interface)
                             pkt = create_data_packet(parsed["SequenceNumber"], name, full_payload, parsed["Flags"], 1, 1)
                             self.sock.sendto(pkt, (self.host, interface))
                             self.log(f"Forwarded reassembled DATA to PIT interface {interface}")
-                            self.remove_pit(name, interface)
                     del self.fragment_buffer[frag_key]
             else:
                 # Regular DATA from destination: add to CS and forward using PIT
@@ -1540,10 +2042,22 @@ class Node:
                 if name in self.pit:
                     interfaces = list(self.pit[name])
                     for interface in interfaces:
+                        # Avoid forwarding DATA back to the interface it arrived from (prevents duplicate delivery)
+                        try:
+                            incoming_port = addr[1] if addr else None
+                        except Exception:
+                            incoming_port = None
+
+                        if incoming_port is not None and int(interface) == int(incoming_port):
+                            # remove PIT entry but don't send back to sender
+                            self.remove_pit(name, interface)
+                            self.log(f"[{self.name}] Skipped forwarding DATA back to incoming iface {interface}")
+                            continue
+
+                        self.remove_pit(name, interface)
                         pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
                         self.sock.sendto(pkt, (self.host, interface))
                         self.log(f"Forwarded DATA to PIT interface {interface}")
-                        self.remove_pit(name, interface)
 
             return pkt_obj
 
@@ -1566,6 +2080,91 @@ class Node:
 
             # Add neighbor to FIB
             self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
+
+        elif packet_type == ROUTE_ACK:
+            parsed_ack = parse_route_ack_packet(packet)
+            if not parsed_ack:
+                self.log(f"[{self.name}] Failed to parse ROUTE_ACK from {addr}")
+                return
+            
+            # Use the full packet name (which may be ENCAP:<border>|<original>) as the lookup key
+            dest_name = parsed_ack.get("Name")
+            self.log(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
+            print(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
+
+            # Forward the ack toward all recorded NS-query interfaces (propagate ack upstream)
+            # Try exact lookup first, then tolerant matches (handles stripped vs full-encap keys).
+            pending = self.ns_query_table.get(dest_name)
+            matched_key = dest_name
+            if not pending:
+                # attempt inner-name and ENCAP-normalized matches
+                for k, v in list(self.ns_query_table.items()):
+                    if not isinstance(k, str):
+                        continue
+                    # direct exact match
+                    if k == dest_name:
+                        pending = v
+                        matched_key = k
+                        break
+                    # ENCAP key that ends with "|<dest>"
+                    if k.endswith("|" + dest_name):
+                        pending = v
+                        matched_key = k
+                        break
+                    # if dest is inner part of an ENCAP key
+                    if k.startswith("ENCAP:") and "|" in k:
+                        try:
+                            _, inner = k.split("|", 1)
+                            inner = inner.strip()
+                            if inner == dest_name:
+                                pending = v
+                                matched_key = k
+                                break
+                        except Exception:
+                            pass
+                    # substring fallback (defensive)
+                    if dest_name in k:
+                        pending = v
+                        matched_key = k
+                        break
+            if pending:
+                for entry in list(pending):
+                    try:
+                        p = int(entry.get("port"))
+                        self.sock.sendto(packet, ("127.0.0.1", p))
+                        self.log(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to iface port {p}")
+                        print(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to iface port {p}")
+                    except Exception as e:
+                        self.log(f"[{self.name}] Error forwarding ROUTE_ACK to iface {entry}: {e}")
+                # remove the recorded PIT for this matched key so subsequent acks don't reuse stale mapping
+                try:
+                    del self.ns_query_table[matched_key]
+                except KeyError:
+                    pass
+                return
+
+            # NEW: If no pending recorded interfaces, forward to own NameServer by default (best-effort)
+            own_domain = self.domains[0] if self.domains else None
+            if own_domain:
+                ns_name = f"/{own_domain}/NameServer1"
+                ns_port = self.name_to_port.get(ns_name)
+                # try FIB fallback if name_to_port doesn't have exact mapping
+                if ns_port is None:
+                    fib_entry = self.fib.get(ns_name)
+                    if fib_entry:
+                        ns_port = fib_entry.get("NextHops")
+                if ns_port:
+                    try:
+                        self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
+                        self.log(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to own NS {ns_name} at port {ns_port}")
+                        print(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to own NS {ns_name} at port {ns_port}")
+                        return
+                    except Exception as e:
+                        self.log(f"[{self.name}] Error forwarding ROUTE_ACK to own NS: {e}")
+
+            # If no NS to forward to, drop as before
+            self.log(f"[{self.name}] No pending NS-query interfaces or NS for ROUTE_ACK {dest_name}; dropping")
+            return
 
         elif packet_type == UPDATE:
             parsed = parse_update_packet(packet)
@@ -1663,6 +2262,44 @@ class Node:
             origin_name = parsed.get("OriginName")
             route_info = parsed.get("RoutingInfoJson")
             dest_name = parsed.get("Name")
+
+            # Alias-aware port resolution
+            def _resolve_port_by_name(self, name_str):
+                """
+                Resolve a node-name (may be space-separated aliases) to a known port.
+                Tries, in order:
+                - exact match in self.name_to_port
+                - any alias token in name_str found in name_to_port
+                - neighbor_table keys (exact or alias tokens)
+                - strip last level (parent) and try again
+                Returns (port:int or None, resolved_name:str or None)
+                """
+                if not name_str:
+                    return None, None
+                # exact
+                if name_str in self.name_to_port:
+                    return self.name_to_port[name_str], name_str
+                # token aliases in the string
+                for token in name_str.split():
+                    if token in self.name_to_port:
+                        return self.name_to_port[token], token
+                # neighbors table (may contain alias forms)
+                for nbr in list(self.neighbor_table.keys()):
+                    if nbr == name_str:
+                        return self.name_to_port.get(nbr), nbr
+                    for token in nbr.split():
+                        if token == name_str or token in name_str.split():
+                            return self.name_to_port.get(nbr), nbr
+                # try parent (strip last level)
+                if '/' in name_str:
+                    parent = '/' + '/'.join(name_str.strip('/').split('/')[:-1])
+                    if parent in self.name_to_port:
+                        return self.name_to_port[parent], parent
+                    for token in parent.split():
+                        if token in self.name_to_port:
+                            return self.name_to_port[token], token
+                return None, None
+
             # Only process if origin_name matches this node
             if origin_name == self.name:
                 # extract destination and next hop (port or name) from reply
@@ -1706,12 +2343,31 @@ class Node:
                                     entry["status"] = "resolved"
                                     entry["timestamp_resolved"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
                                     self.log(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
+                                    print(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
                                     forwarded_local.append(entry)
+                                    print("hello")
                     except Exception as e:
                         print(f"[{self.name}] Error storing FIB from NS reply: {e}")
                 else:
                     print(f"[{self.name}] Route reply missing dest/next_hop info: route_info={route_info}")
                     self.log(f"[{self.name}] Route reply missing dest/next_hop info: route_info={route_info}")
+
+                # NEW: After processing the route, send ROUTE_ACK to any ack_only origins for this destination
+                # (e.g., the router that sent the ENCAP packet expecting an ACK upon route resolution)
+                pending_acks = self.ns_query_table.get(dest_name, [])
+                ack_only_ports = [entry.get("port") for entry in pending_acks if entry.get("ack_only")]
+                if ack_only_ports:
+                    for port in list(set(ack_only_ports)):  # Deduplicate ports
+                        try:
+                            #ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
+                            self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                            self.log(f"[{self.name}] Sent ROUTE_ACK for {dest_name} to ENCAP origin port {port} (ack_only)")
+                        except Exception as e:
+                            self.log(f"[{self.name}] Error sending ROUTE_ACK to ENCAP origin port {port}: {e}")
+                    # Clear the ack_only entries after sending
+                    self.ns_query_table[dest_name] = [entry for entry in pending_acks if not entry.get("ack_only")]
+                    if not self.ns_query_table[dest_name]:
+                        del self.ns_query_table[dest_name]
 
                 # Also update FIB entry for the route packet name (metadata)
                 # Instead of using the sender's port (addr[1]) which can point back toward the origin
@@ -1751,6 +2407,37 @@ class Node:
                 return pkt_obj
         
             else:
+                path_to_origin = parsed.get("PathToOrigin")
+                if path_to_origin and isinstance(path_to_origin, list):
+                    normalized_p2o = [p.strip() for p in path_to_origin if isinstance(p, str)]
+                    if self.name in normalized_p2o:
+                        # If NS included the next hop port for us, forward immediately.
+                        explicit_nhp = None
+                        if isinstance(route_info, dict):
+                            explicit_nhp = route_info.get("next_hop_port")
+                        if explicit_nhp is not None:
+                            try:
+                                nhp_int = int(explicit_nhp)
+                                self.sock.sendto(packet, ("127.0.0.1", nhp_int))
+                                self.log(f"[{self.name}] Forwarded ROUTE DATA (explicit next_hop_port={nhp_int}) along path_to_origin")
+                                return pkt_obj
+                            except Exception as e:
+                                self.log(f"[{self.name}] Failed explicit next_hop_port forward: {e}")
+                        # Fallback: existing name-based hop resolution
+                        idx = normalized_p2o.index(self.name)
+                        for j in range(idx + 1, len(normalized_p2o)):
+                            next_hop_name = normalized_p2o[j]
+                            next_port = _resolve_port_by_name(next_hop_name)
+                            if next_port is not None:
+                                try:
+                                    self.sock.sendto(packet, ("127.0.0.1", next_port))
+                                    self.log(f"[{self.name}] Forwarded ROUTE DATA along path_to_origin to {next_hop_name} (port {next_port})")
+                                    return pkt_obj
+                                except Exception as e:
+                                    self.log(f"[{self.name}] Error forwarding ROUTE DATA to {next_hop_name} at port {next_port}: {e}")
+                                    # try next candidate hop
+                        # If none resolvable, fall through to existing logic
+
                 # If not for this node:
                 # 1) first try to forward the ROUTE reply back to any interface(s) that previously
                 #    sent an NS QUERY for this destination (ns_query_table).
@@ -1759,14 +2446,37 @@ class Node:
                 # This ensures intermediate routers that forwarded a data=False query can receive
                 # the reply and continue the recursive resolution.
                 dest_name = parsed.get("Name")
-                pending_ifaces = self.ns_query_table.get(dest_name, [])
-                if pending_ifaces:
-                    for p in list(pending_ifaces):
+                pending = self.ns_query_table.get(dest_name, [])
+                if pending:
+                    # pending is list of dicts { "port": <int>, "ack_only": <bool> }
+                    for entry in list(pending):
                         try:
-                            self.sock.sendto(packet, ("127.0.0.1", int(p)))
-                            self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
+                            p = int(entry.get("port"))
+                            if entry.get("ack_only"):
+                                # The interface who asked us used ack-only registration (e.g. ENCAP origin).
+                                # They still need the full ROUTE_DATA so they can continue resolution. Send full packet;
+                                # if that fails, fall back to sending a lightweight ROUTE_ACK.
+                                try:
+                                    self.sock.sendto(packet, ("127.0.0.1", p))
+                                    self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p} (ack_only -> sent full ROUTE_DATA)")
+                                except Exception as e:
+                                    # fallback: send lightweight ack only
+                                    try:
+                                        ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
+                                        self.sock.sendto(ack_pkt, ("127.0.0.1", p))
+                                        self.log(f"[{self.name}] Sent ROUTE_ACK for {dest_name} to NS-query iface port {p} (ack_only, fallback due to send error: {e})")
+                                    except Exception as e2:
+                                        self.log(f"[{self.name}] Failed to send ROUTE_DATA or ROUTE_ACK to port {p}: {e2}")
+                            else:
+                                # original behaviour: forward full ROUTE_DATA
+                                try:
+                                    self.sock.sendto(packet, ("127.0.0.1", p))
+                                    self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
+                                    print(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
+                                except Exception as e:
+                                    self.log(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {entry}: {e}")
                         except Exception as e:
-                            self.log(f"[{self.name}] Error forwarding ROUTE DATA to NS-query iface {p}: {e}")
+                            self.log(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {entry}: {e}")
                     # clear recorded pending query interfaces for this destination
                     try:
                         del self.ns_query_table[dest_name]
@@ -1813,6 +2523,21 @@ class Node:
                     # Try to forward directly to origin if we know its port
                     if origin_name:
                         origin_port = self.name_to_port.get(origin_name)
+
+                        # If exact match failed, try relaxed/alias match (prefix-style).
+                        if origin_port is None:
+                            for known_name, known_port in list(self.name_to_port.items()):
+                                try:
+                                    # Accept if origin_name starts with known_name (known is prefix),
+                                    # or known_name starts with origin_name (origin is a prefix of known).
+                                    # This covers cases like "/DLSU/Andrew" vs "/DLSU/Andrew/PC1".
+                                    if (isinstance(known_name, str) and isinstance(origin_name, str) and
+                                            (origin_name.startswith(known_name) or known_name.startswith(origin_name))):
+                                        origin_port = known_port
+                                        break
+                                except Exception:
+                                    continue
+
                         if origin_port:
                             try:
                                 self.sock.sendto(packet, ("127.0.0.1", int(origin_port)))
@@ -1906,6 +2631,20 @@ class Node:
     
     def get_neighbors(self):
         return self.neighbor_table
+
+    def _is_ns_port(self, port):
+        """Return True if 'port' belongs to a known NameServer (avoid registering NS ports in ns_query_table)."""
+        try:
+            p = int(port)
+        except Exception:
+            return False
+        for nm, nm_port in list(self.name_to_port.items()):
+            try:
+                if "NameServer" in nm and int(nm_port) == p:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def remove_stale_neighbors(self, timeout=30):
         now = datetime.now()
