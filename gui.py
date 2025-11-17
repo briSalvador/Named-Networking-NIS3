@@ -173,6 +173,9 @@ HIGHLIGHT_RULES = [
     ("data_fragment_sent", r"Sent DATA fragment"),
     ("data_sent", r"Sent DATA packet to"),
 
+    ("fib_table_snapshot", r"FIB TABLE SNAPSHOT"),
+    ("pit_table_snapshot", r"PIT TABLE SNAPSHOT"),
+    ("cs_table_snapshot", r"CS TABLE SNAPSHOT"),
 
 
 
@@ -228,6 +231,49 @@ class LogGUI:
         self._start_refresh_loop()
         self._update_table_tab_styles()
         self._update_node_table()
+
+    # tables for logs
+    def _format_table(self, headers, rows):
+        col_widths = []
+        for i, h in enumerate(headers):
+            max_len = len(str(h))
+            for r in rows:
+                if i < len(r):
+                    max_len = max(max_len, len(str(r[i])))
+            col_widths.append(max_len)
+
+        def fmt_row(row):
+            return "  " + "  ".join(
+                str(cell).ljust(col_widths[i]) for i, cell in enumerate(row)
+            )
+
+        lines = []
+        lines.append(fmt_row(headers))
+        lines.append("  " + "  ".join("-" * w for w in col_widths))
+        for r in rows:
+            lines.append(fmt_row(r))
+        return "\n".join(lines)
+
+    def _format_fib_table_for_node(self, node):
+        fib = getattr(node, "fib", {}) or {}
+        headers = ["Pos", "Source", "Name", "NextHop", "HopCount", "Expiration"]
+        rows = []
+        for idx, (name, info) in enumerate(fib.items(), start=1):
+            src = (
+                info.get("Source")
+                or info.get("OriginName")
+                or info.get("Origin")
+                or ""
+            )
+            nh = info.get("NextHops", "")
+            hc = info.get("HopCount", "")
+            exp = info.get("ExpirationTime", "")
+            rows.append([idx, src, name, nh, hc, exp])
+
+        if not rows:
+            rows.append(["-", "-", "(empty)", "-", "-", "-"])
+
+        return self._format_table(headers, rows)
 
     # ui
     def _build_layout(self):
@@ -375,7 +421,8 @@ class LogGUI:
                     "route_ns_iface", "route_prev_hop",
                     "route_direct_origin", "fib_installed", "fib_updated2",
                     "ns_send_route_pkt",
-                    "route_pit_iface", "route_pit_port"):
+                    "route_pit_iface", "route_pit_port", 
+                    "fib_table_snapshot", "pit_table_snapshot", "cs_table_snapshot"):
             self.log_text.tag_configure(tag, foreground="blue")
 
         # -----------------------------------------------
@@ -579,10 +626,11 @@ class LogGUI:
         rows = []
 
         if mode == "FIB":
-            cols = ("name", "next_hop", "hop_count", "expiration")
+            cols = ("source", "name", "next_hop", "hop_count", "expiration")
             self.table_tree["columns"] = cols
             for c in cols:
                 self.table_tree.heading(c, text=c.replace("_", " ").title())
+            self.table_tree.column("source", width=120, anchor="w")
             self.table_tree.column("name", width=220, anchor="w")
             self.table_tree.column("next_hop", width=80, anchor="center")
             self.table_tree.column("hop_count", width=80, anchor="center")
@@ -590,10 +638,16 @@ class LogGUI:
 
             fib = getattr(node, "fib", {})
             for name, info in fib.items():
+                src = (
+                    info.get("Source")
+                    or info.get("OriginName")
+                    or info.get("Origin")
+                    or ""
+                )
                 nh = info.get("NextHops", "")
                 hc = info.get("HopCount", "")
                 exp = info.get("ExpirationTime", "")
-                rows.append((name, nh, hc, exp))
+                rows.append((src, name, nh, hc, exp))
 
         elif mode == "CS":
             cols = ("name", "data")
@@ -940,6 +994,23 @@ class LogGUI:
                 tag_start = f"{start_index}+{m.start()}c"
                 tag_end   = f"{start_index}+{m.end()}c"
                 self.log_text.tag_add("node_name", tag_start, tag_end)
+
+            # table snapshots
+            if "Installed FIB for" in line or "Updated FIB:" in line or "FIB updated:" in line:
+                m = re.match(r"\[([^\]]+)\]", line)
+                if m:
+                    node_name = m.group(1)
+                    node_obj = None
+                    for n in self.controller.nodes.values():
+                        if _get_node_name(n) == node_name:
+                            node_obj = n
+                            break
+
+                    if node_obj is not None:
+                        table_str = self._format_fib_table_for_node(node_obj)
+                        header = f"[{node_name}] FIB TABLE SNAPSHOT:\n"
+                        self.log_text.insert("end", header, ("fib_table_snapshot",))
+                        self.log_text.insert("end", table_str + "\n")
 
             last_was_cmd = line.startswith("[CMD]") or line.startswith("[CMD-OUT]")
 
