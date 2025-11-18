@@ -1386,9 +1386,22 @@ class Node:
                 if target_port:
                     try:
                         if parsed["Flags"] != 0x1:
-                            self.sock.sendto(packet, ("127.0.0.1", target_port))
                             self.log(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
                             print(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
+                            try:
+                                full_key = parsed.get("Name")
+                                if full_key:
+                                    self.ns_query_table.setdefault(full_key, [])
+                                    exists = any(item.get("port") == addr[1] for item in self.ns_query_table[full_key])
+                                    if not exists:
+                                        self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
+                                        self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                        print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                        print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
+                            except Exception as e:
+                                self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
+                            
+                            self.sock.sendto(packet, ("127.0.0.1", target_port))
                             #self.ns_query_table[parsed["Name"]].append({"port": addr[1], "ack_only": False})
                             return
                     except Exception as e:
@@ -2092,6 +2105,7 @@ class Node:
             dest_name = parsed_ack.get("Name")
             self.log(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
             print(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
+            #print(f"[{self.name}] ROUTE_ACK NS Query List: {self.ns_query_table}")
 
             # Forward the ack toward all recorded NS-query interfaces (propagate ack upstream)
             # Try exact lookup first, then tolerant matches (handles stripped vs full-encap keys).
