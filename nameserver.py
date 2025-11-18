@@ -1086,11 +1086,14 @@ class NameServer:
                 except Exception:
                     hop_count_to_dest = max(0, len(path) - 1) if path else 0
 
+                # set SourceName to the original source-border router (first ENCAP element) so upstream
+                # NameServers can compute distances between border routers correctly.
+                ack_src = source_border or enc_border or parsed.get("OriginNode") or src_name
                 ack_pkt = create_route_ack_packet(
                             seq_num=seq_num,
                             name=parsed["Name"],
                             flags=0x0,
-                            source_name=enc_border,
+                            source_name=ack_src,
                             hop_count=hop_count_to_dest,
                             visited_domains=parsed.get("VisitedDomains", [])
                         )
@@ -1188,11 +1191,15 @@ class NameServer:
 
                 new_hop_count = int(incoming_hops) + int(extra_hops)
 
+                # Preserve the downstream border-router identity in SourceName so upstream NSs can
+                # compute intra-domain distances correctly. Fallback to our recorded border_router or
+                # self.ns_name if nothing better is available.
+                src_name_field = parsed.get("SourceName") or pending.get("border_router") or self.ns_name
                 new_route_ack = create_route_ack_packet(
                     seq_num=seq_num,
                     name=cleaned_ack_name,
                     flags=0x0,
-                    source_name=self.ns_name,
+                    source_name=src_name_field,
                     hop_count=new_hop_count,
                     visited_domains=visited_domains
                 )
