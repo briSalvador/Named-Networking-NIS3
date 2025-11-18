@@ -149,6 +149,10 @@ if __name__ == "__main__":
     # dcam1.add_cs(interest_name, "Hello from cam1")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
+    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
+    # acam1.add_cs(interest_name, "Hello from ADMU cam1")
+    # send_interest_via_ns(dcam1, seq_num=0, name=interest_name, data_flag=False)
+
     # # Test Case for /DLSU (used to check if name truncation is correct)
     # interest_name = "/DLSU/hello.txt"
     # dlsu.add_cs(interest_name, "Hello from DLSU!")
@@ -196,6 +200,7 @@ if __name__ == "__main__":
     # fib tables
     print("\n--- FIB Tables ---")
     print("admu FIB: ", admu.fib)
+    print("goks FIB: ", goks.fib)
     # print("henry FIB:", henry.fib)
     # print("andrew FIB:", andrew.fib)
     # print("dpc1 FIB:", dpc1.fib)

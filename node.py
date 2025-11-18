@@ -1021,19 +1021,19 @@ class Node:
                     first_hop_name = nbr
                     break
             # fallback: any known non-NS port
-            if not first_hop_port:
-                for n, p in self.name_to_port.items():
-                    try:
-                        if int(p) != int(target[1]):
-                            first_hop_port = int(p)
-                            first_hop_name = n
-                            break
-                    except Exception:
-                        continue
-            if first_hop_port:
-                resolved_target = (self.host, first_hop_port)
-                print(f"[{self.name}] NS QUERY: redirecting toward first-hop {first_hop_name} (port {first_hop_port}) instead of NS port {target[1]}")
-                self.log(f"NS QUERY redirect -> first-hop {first_hop_name} port {first_hop_port}")
+            # if not first_hop_port:
+            #     for n, p in self.name_to_port.items():
+            #         try:
+            #             if int(p) != int(target[1]):
+            #                 first_hop_port = int(p)
+            #                 first_hop_name = n
+            #                 break
+            #         except Exception:
+            #             continue
+            # if first_hop_port:
+            #     resolved_target = (self.host, first_hop_port)
+            #     print(f"[{self.name}] NS QUERY: redirecting toward first-hop {first_hop_name} (port {first_hop_port}) instead of NS port {target[1]}")
+            #     self.log(f"NS QUERY redirect -> first-hop {first_hop_name} port {first_hop_port}")
 
         # Send the query toward the resolved target (first-hop or NS fallback)
         try:
@@ -1102,7 +1102,7 @@ class Node:
         elif name in self.fib and hop_count < self.fib[name]["HopCount"]:
             self.fib[name] = entry
 
-        self.log(f"[{self.name}] FIB updated: {self.fib}")
+        #self.log(f"[{self.name}] FIB updated: {self.fib}")
 
     def get_next_hops(self, name):
         if name in self.fib:
@@ -1737,6 +1737,7 @@ class Node:
                 # (special-case: node is adjacent to the dest) — this executes only in the pre-NS path.
                 if is_real_interest:
                     node_name = get_node_name(parsed["Name"])
+                    print(f"[{self.name}] node_name: {node_name} extracted from Interest name {parsed['Name']}")
                     neighbor_port = self.name_to_port.get(node_name)
                     if neighbor_port is not None:
                         # direct-adjacent: forward straight to neighbor (no NS query needed)
@@ -1904,7 +1905,7 @@ class Node:
                         self.log(f"[{self.name}] BORDER: No suitable NS found for {parsed['Name']}")
                         return
 
-            if table == "CS":
+            elif table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.log(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.remove_pit(pkt_obj.name, addr[1])

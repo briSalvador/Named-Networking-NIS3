@@ -77,7 +77,7 @@ def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=F
 
     return packet
 
-def create_error_packet(seq_num, name, error_code, origin_node="", flags=0x0):
+def create_error_packet(seq_num, name, error_code, origin_node="", flags=0x0, data_flag=False, visited_domains=None):
     """
     Build an ERROR packet with origin node info:
     Header: packet_type&flags (1 byte), seq_num (1 byte),
@@ -427,6 +427,12 @@ def append_visited_domain(parsed, new_domain):
     #     return None
 
 class NameServer:
+    def log(self, message):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        if not hasattr(self, 'logs'):
+            self.logs = []
+        self.logs.append({"timestamp": timestamp, "message": message})
+
     def __init__(self, ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt"):
         self.ns_name = ns_name
         self.host = host
@@ -481,6 +487,7 @@ class NameServer:
                             target_port = self.name_to_port[node]
                             self.sock.sendto(pkt, (self.host, target_port))
                             print(f"[NS {self.ns_name}] Sent ROUTE packet to {node} (alias: {alias}) at port {target_port} with next hop {next_hop}")
+                            self.log(f" Sent ROUTE packet to {node} (alias: {alias}) at port {target_port} with next hop {next_hop}")
             time.sleep(10)
 
     def _find_pending(self, name, seq=None, origin=None):
@@ -536,9 +543,11 @@ class NameServer:
                                 #print(f"[{self.ns_name}] Sent HELLO packet to {self.host}:{port}")
                             except Exception as e:
                                 print(f"[{self.ns_name}] Error sending HELLO packet to {self.host}:{port}: {e}")
+                                self.log(f"[{self.ns_name}] Error sending HELLO packet to {self.host}:{port}: {e}")
                         #print(f"[{self.ns_name}] Loaded neighbors from {filename}: {ports}")
         except Exception as e:
             print(f"[{self.ns_name}] Error loading neighbors from {filename}: {e}")           
+            self.log(f"[{self.ns_name}] Error loading neighbors from {filename}: {e}")           
 
     def _load_topology_file(self, path):
         try:
@@ -601,6 +610,7 @@ class NameServer:
             parsed = parse_update_packet(packet)
             if not parsed:
                 print(f"[NS {self.ns_name}] Failed to parse UPDATE from {addr}")
+                self.log(f" Failed to parse UPDATE from {addr}")
                 return
 
             # Only process neighbor update packets (flag 0x2)
@@ -772,6 +782,7 @@ class NameServer:
             parsed = parse_interest_packet(packet)
         except Exception as e:
             print(f"[NS {self.ns_name}] Failed to parse INTEREST from {addr}: {e}")
+            self.log(f" Failed to parse INTEREST from {addr}: {e}")
             # attempt to extract seq_num if present
             seq_num = packet[1] if len(packet) > 1 else 0
             origin_name = self.port_to_name.get(addr[1], "UNKNOWN")
@@ -780,8 +791,10 @@ class NameServer:
             try:
                 self.sock.sendto(err_pkt, addr)
                 print(f"[NS {self.ns_name}] Sent FORMAT_ERROR to {addr} (origin={origin_name})")
+                self.log(f" Sent FORMAT_ERROR to {addr} (origin={origin_name})")
             except Exception as se:
                 print(f"[NS {self.ns_name}] Failed to send FORMAT_ERROR to {addr}: {se}")
+                self.log(f" Failed to send FORMAT_ERROR to {addr}: {se}")
             return
 
         dest_name = parsed["Name"]
@@ -791,6 +804,7 @@ class NameServer:
         if not src_name:
             # don't know who this is
             print(f"[NS {self.ns_name}] INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")
+            self.log(f" INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")
             src_name = "UNKNOWN"
 
         enc_layers = []
@@ -826,6 +840,7 @@ class NameServer:
             self.pit[base_name].append(addr)
 
         print(f"[NS {self.ns_name}] ROUTE REQ: {src_name} -> {dest_name}")
+        self.log(f" ROUTE REQ: {src_name} -> {dest_name}")
 
         original_name = dest_name
         # destination for routing calculation:
@@ -882,6 +897,7 @@ class NameServer:
                 nearest_border = _find_nearest_border_router()
                 if nearest_border:
                     print(f"[NS {self.ns_name}] No border routers for domain {target_top}; using nearest border router {nearest_border}")
+                    self.log(f" No border routers for domain {target_top}; using nearest border router {nearest_border}")
                     border_candidates.append(nearest_border)
 
             for candidate in border_candidates:
@@ -922,10 +938,12 @@ class NameServer:
                             # Print the ENCAP-forwarded message and the pending table together
                             with _PRINT_LOCK:
                                 print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                             #print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
                             return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
+                            self.log(f" Error forwarding INTEREST to {resolved_name}:{port} - {e}")
 
                 # 2) Fallback: try path from the original source to the candidate and search ANY hop the NS knows
                 path_to_border = self._shortest_path(src_name, candidate)
@@ -970,9 +988,11 @@ class NameServer:
                             }
                             with _PRINT_LOCK:
                                 print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                             return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
+                            self.log(f" Error forwarding INTEREST to {resolved_name}:{port} - {e}")
 
                 # 3) As fallback, check candidate aliases themselves (direct mapping)
                 for alias in candidate.split():
@@ -1005,12 +1025,15 @@ class NameServer:
                             }
                             with _PRINT_LOCK:
                                 print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                             return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to alias {alias} - {e}")
+                            self.log(f" Error forwarding INTEREST to alias {alias} - {e}")
 
             # If we couldn't forward to any border router because there were no known ports on path/candidates
             print(f"[NS {self.ns_name}] Target domain {target_top} not local and no reachable border port found — continuing resolution attempt.")
+            self.log(f" Target domain {target_top} not local and no reachable border port found — continuing resolution attempt.")
 
         # Normal handling: compute path to destination inside this domain
         else:
@@ -1022,6 +1045,16 @@ class NameServer:
                 resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=payload, flags=ACK_FLAG)
                 self.sock.sendto(resp, addr)
                 print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
+                self.log(f" No path. Sent DATA(NameNotFound) to {addr}")
+
+                err_pkt = create_error_packet(seq_num, original_name, NAME_ERROR, src_name)
+                try:
+                    self.sock.sendto(err_pkt, addr)
+                    print(f"[NS {self.ns_name}] No path. Sent NAME_ERROR for {original_name} to {addr}")
+                    self.log(f" No path. Sent NAME_ERROR for {original_name} to {addr}")
+                except Exception as e:
+                    print(f"[NS {self.ns_name}] Failed to send NAME_ERROR to {addr}: {e}")
+                    self.log(f" Failed to send NAME_ERROR to {addr}: {e}")
                 return
 
             next_hop = path[1] if len(path) >= 2 else dest_node
@@ -1043,22 +1076,27 @@ class NameServer:
                         )
                 print(f"[NS {self.ns_name}] Sent ROUTE_ACK for ENCAP name='{enc_name}' "
                     f"(full='{parsed["Name"]}', hop_count={len(path)}) to {addr}")
+                self.log(f" Sent ROUTE_ACK for ENCAP name='{enc_name}' "
+                    f"(full='{parsed["Name"]}', hop_count={len(path)}) to {addr}")
                 self.sock.sendto(ack_pkt, addr)
             else:
                 resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
                 self.sock.sendto(resp, addr)
                 print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
+                self.log(f" Sent ROUTE (next_hop={next_hop}) to {addr}")
 
     def _handle_route_ack(self, packet, addr):
         parsed = parse_route_ack_packet(packet)
         if not parsed:
             print(f"[NS {self.ns_name}] Failed to parse ROUTE_ACK from {addr}")
+            self.log(f" Failed to parse ROUTE_ACK from {addr}")
             return
 
         dest_name = parsed["Name"]
         seq_num = parsed["SequenceNumber"]
 
         print(f"[NS {self.ns_name}] Received ROUTE_ACK for {dest_name} from {addr}")
+        self.log(f" Received ROUTE_ACK for {dest_name} from {addr}")
 
         cleaned_ack_name = dest_name  # default (no ENCAP)
         if isinstance(dest_name, str) and dest_name.startswith("ENCAP:"):
@@ -1094,6 +1132,7 @@ class NameServer:
             stripped = self._strip_encap(cleaned_ack_name)
             found_key, pending = self._find_pending(stripped, seq=seq_num)
             print(f"[NS {self.ns_name}] No pending ENCAP interest for {cleaned_ack_name} (already processed or not tracked)")
+            self.log(f" No pending ENCAP interest for {cleaned_ack_name} (already processed or not tracked)")
             #print(f"[NS {self.ns_name}] Pending Table: {self.pending_interests}")
             return
         # if pending:
@@ -1124,6 +1163,8 @@ class NameServer:
                     visited_domains=visited_domains
                 )
                 print(f"[NS {self.ns_name}] Forwarded ROUTE_ACK → next hop (port {next_hop})")
+                self.log(f" Forwarded ROUTE_ACK → next hop (port {next_hop})")
+
                 print(f"[NS {self.ns_name}] New Visited Domains List: {visited_domains}")
                 print(f"[NS {self.ns_name}] Cleared pending ENCAP interest for {cleaned_ack_name}")
                 
@@ -1133,6 +1174,7 @@ class NameServer:
                 return
             except Exception as e:
                 print(f"[NS {self.ns_name}] Error forwarding ACK to:{next_hop} - {e}")
+                self.log(f" Error forwarding ACK to:{next_hop} - {e}")
         # if ns_domain != origin_domain:
         #     print(f"[NS {self.ns_name}] Origin {origin_node} is outside domain {ns_domain}.")
         #     print(f"[NS {self.ns_name}] Forwarding ROUTE_ACK interdomain based on pending border router path…")
@@ -1189,6 +1231,7 @@ class NameServer:
             # original_target should be the base (no ENCAP)
             original_target = self._strip_encap(dest_name)
             print(f"[NS {self.ns_name}] Preparing ROUTE_DATA reply to {origin_node} for {original_target}, direct to border router: {pending['border_router']}")
+            self.log(f" Preparing ROUTE_DATA reply to {origin_node} for {original_target}, direct to border router: {pending['border_router']}")
 
             # Prefer sending directly to the recorded original requester address if available.
             recorded_addr = pending.get("addr")
