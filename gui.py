@@ -5,6 +5,7 @@ import re
 import io
 import sys
 import tkinter.font as tkfont
+import node
 
 
 TS_FMT = "%Y-%m-%d %H:%M:%S.%f"
@@ -929,34 +930,27 @@ class LogGUI:
 
     def _collect_logs(self):
         selected = self.selected_nodes
-        logs = []
-
-        # node logs
-        for n in self.controller.nodes.values():
-            nm = _get_node_name(n)
-            if selected and nm not in selected:
-                continue
-            entries = getattr(n, "logs", [])
-            for e in entries:
-                ts = e.get("timestamp", "")
-                raw_msg = e.get("message", "").strip()
-                if not raw_msg:
-                    continue
-
-                prefix = f"[{nm}]"
-                if raw_msg.startswith(prefix):
-                    line = raw_msg
+        
+        if hasattr(node, '_global_log_buffer'):
+            all_logs = list(node._global_log_buffer)
+        else:
+            all_logs = []
+        
+        all_logs.extend(self.command_entries)
+        
+        if selected:
+            filtered_logs = []
+            for ts, line in all_logs:
+                if line.startswith("[CMD]"):
+                    filtered_logs.append((ts, line))
                 else:
-                    line = f"{prefix} {raw_msg}"
-
-                logs.append((ts, line))
-
-        # command logs
-        logs.extend(self.command_entries)
-
-        # sort by timestamp
-        logs.sort(key=lambda t: _parse_ts(t[0]))
-        return logs
+                    for node_name in selected:
+                        if f"[{node_name}]" in line:
+                            filtered_logs.append((ts, line))
+                            break
+            return filtered_logs
+        
+        return all_logs
 
 
     def _clear_logs_view(self):

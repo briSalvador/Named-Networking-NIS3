@@ -77,46 +77,46 @@ def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=F
 
     return packet
 
-def create_error_packet(seq_num, name, error_code, origin_node="", flags=0x0, data_flag=False, visited_domains=None):
-    """
-    Build an ERROR packet with origin node info:
-    Header: packet_type&flags (1 byte), seq_num (1 byte),
-            error_code (1 byte), name_length (1 byte)
-    Then: name (variable), origin_length (1 byte), origin_node (variable)
-    """
-    packet_type = ERROR
-    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+# def create_error_packet(seq_num, name, error_code, origin_node="", flags=0x0, data_flag=False, visited_domains=None):
+#     """
+#     Build an ERROR packet with origin node info:
+#     Header: packet_type&flags (1 byte), seq_num (1 byte),
+#             error_code (1 byte), name_length (1 byte)
+#     Then: name (variable), origin_length (1 byte), origin_node (variable)
+#     """
+#     packet_type = ERROR
+#     packet_type_flags = (packet_type << 4) | (flags & 0xF)
 
-    seq_num = seq_num & 0xFF
-    err_code = error_code & 0xFF
-    name_bytes = name.encode("utf-8")
-    name_length = len(name_bytes)
+#     seq_num = seq_num & 0xFF
+#     err_code = error_code & 0xFF
+#     name_bytes = name.encode("utf-8")
+#     name_length = len(name_bytes)
 
-    origin_bytes = origin_node.encode("utf-8")
-    origin_length = len(origin_bytes)
+#     origin_bytes = origin_node.encode("utf-8")
+#     origin_length = len(origin_bytes)
 
-    data_flag_byte = b'\x01' if data_flag else b'\x00'
+#     data_flag_byte = b'\x01' if data_flag else b'\x00'
 
-    # ---- Encode visited_domains ----
-    vd_count = len(visited_domains) & 0xFF
-    vd_bytes = bytes([vd_count])
+#     # ---- Encode visited_domains ----
+#     vd_count = len(visited_domains) & 0xFF
+#     vd_bytes = bytes([vd_count])
 
-    for dom in visited_domains:
-        dom_b = dom.encode("utf-8")
-        vd_bytes += bytes([len(dom_b) & 0xFF]) + dom_b
+#     for dom in visited_domains:
+#         dom_b = dom.encode("utf-8")
+#         vd_bytes += bytes([len(dom_b) & 0xFF]) + dom_b
 
-    # ---- Build packet ----
-    header = struct.pack("!BBB", packet_type_flags, seq_num, name_length)
-    packet = (
-        header +
-        name_bytes +
-        bytes([origin_length]) +
-        origin_bytes +
-        data_flag_byte +
-        vd_bytes
-    )
+#     # ---- Build packet ----
+#     header = struct.pack("!BBB", packet_type_flags, seq_num, name_length)
+#     packet = (
+#         header +
+#         name_bytes +
+#         bytes([origin_length]) +
+#         origin_bytes +
+#         data_flag_byte +
+#         vd_bytes
+#     )
 
-    return packet
+#     return packet
 
 def create_error_packet(seq_num, name, error_code, origin_node="", flags=0x0):
     """
@@ -913,34 +913,34 @@ class NameServer:
                             existing_key, _ = self._find_pending(raw_name, seq=seq_num, origin=src_name)
                             if existing_key:
                                 print(f"[NS {self.ns_name}] Suppressing duplicate ENCAP for {original_name} from {src_name} (seq={seq_num}) — pending already exists")
-                                return
+                                #return
                             # Build new ENCAP chain:
                             # ENCAP:<old_layer1>|<old_layer2>|...|<new_candidate>|<dest_name>
+                            else:
+                                new_enc_layers = list(enc_layers)      # copy existing stack
+                                new_enc_layers.append(candidate)       # append new border
+                                final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
 
-                            new_enc_layers = list(enc_layers)      # copy existing stack
-                            new_enc_layers.append(candidate)       # append new border
-                            final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
-
-                            new_visited_list = append_visited_domain(parsed, my_top)
-                            enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
-                            self.sock.sendto(enc_pkt, (self.host, int(port)))
-                            # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
-                            # key = (original_name, src_name, seq_num)
-                            # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
-                            # Key is now the full ENCAP name
-                            self.pending_interests[parsed["Name"]] = {
-                                "addr": addr,
-                                "origin": src_name,
-                                "border_router": candidate,
-                                "seq_num": seq_num,    # optional, can help with duplicates
-                                "ts": time.time()
-                            }
-                            # Print the ENCAP-forwarded message and the pending table together
-                            with _PRINT_LOCK:
-                                print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
-                                self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
-                            #print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
-                            return
+                                new_visited_list = append_visited_domain(parsed, my_top)
+                                enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
+                                self.sock.sendto(enc_pkt, (self.host, int(port)))
+                                # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
+                                # key = (original_name, src_name, seq_num)
+                                # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
+                                # Key is now the full ENCAP name
+                                self.pending_interests[parsed["Name"]] = {
+                                    "addr": addr,
+                                    "origin": src_name,
+                                    "border_router": candidate,
+                                    "seq_num": seq_num,    # optional, can help with duplicates
+                                    "ts": time.time()
+                                }
+                                # Print the ENCAP-forwarded message and the pending table together
+                                with _PRINT_LOCK:
+                                    print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                    self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                #print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
+                                return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
                             self.log(f" Error forwarding INTEREST to {resolved_name}:{port} - {e}")
@@ -966,30 +966,30 @@ class NameServer:
                             existing_key, _ = self._find_pending(raw_name, seq=seq_num, origin=src_name)
                             if existing_key:
                                 print(f"[NS {self.ns_name}] Suppressing duplicate ENCAP for {original_name} from {src_name} (seq={seq_num}) — pending already exists")
-                                return
+                                #return
 
                             # Build new ENCAP chain:
                             # ENCAP:<old_layer1>|<old_layer2>|...|<new_candidate>|<dest_name>
-
-                            new_enc_layers = list(enc_layers)      # copy existing stack
-                            new_enc_layers.append(candidate)       # append new border
-                            final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
-                            new_visited_list = append_visited_domain(parsed, my_top)
-                            enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
-                            self.sock.sendto(enc_pkt, (self.host, int(port)))
-                            # key = (original_name, src_name, seq_num)
-                            # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
-                            self.pending_interests[parsed["Name"]] = {
-                                "addr": addr,
-                                "origin": src_name,
-                                "border_router": candidate,
-                                "seq_num": seq_num,    # optional, can help with duplicates
-                                "ts": time.time()
-                            }
-                            with _PRINT_LOCK:
-                                print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
-                                self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
-                            return
+                            else:
+                                new_enc_layers = list(enc_layers)      # copy existing stack
+                                new_enc_layers.append(candidate)       # append new border
+                                final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
+                                new_visited_list = append_visited_domain(parsed, my_top)
+                                enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
+                                self.sock.sendto(enc_pkt, (self.host, int(port)))
+                                # key = (original_name, src_name, seq_num)
+                                # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
+                                self.pending_interests[parsed["Name"]] = {
+                                    "addr": addr,
+                                    "origin": src_name,
+                                    "border_router": candidate,
+                                    "seq_num": seq_num,    # optional, can help with duplicates
+                                    "ts": time.time()
+                                }
+                                with _PRINT_LOCK:
+                                    print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                    self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
                             self.log(f" Error forwarding INTEREST to {resolved_name}:{port} - {e}")
@@ -1001,32 +1001,32 @@ class NameServer:
                             existing_key, _ = self._find_pending(raw_name, seq=seq_num, origin=src_name)
                             if existing_key:
                                 print(f"[NS {self.ns_name}] Suppressing duplicate ENCAP for {original_name} from {src_name} (seq={seq_num}) — pending already exists")
-                                return
+                                #return
 
                             # Build new ENCAP chain:
                             # ENCAP:<old_layer1>|<old_layer2>|...|<new_candidate>|<dest_name>
-
-                            new_enc_layers = list(enc_layers)      # copy existing stack
-                            new_enc_layers.append(candidate)       # append new border
-                            final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
-                            new_visited_list = append_visited_domain(parsed, my_top)
-                            enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
-                            self.sock.sendto(enc_pkt, (self.host, int(self.name_to_port[alias])))
-                            # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
-                            # CHANGED: Store border_router (candidate) in pending_interests for later use in ACK handling
-                            # key = (original_name, src_name, seq_num)
-                            # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
-                            self.pending_interests[parsed["Name"]] = {
-                                "addr": addr,
-                                "origin": src_name,
-                                "border_router": candidate,
-                                "seq_num": seq_num,    # optional, can help with duplicates
-                                "ts": time.time()
-                            }
-                            with _PRINT_LOCK:
-                                print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
-                                self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
-                            return
+                            else:
+                                new_enc_layers = list(enc_layers)      # copy existing stack
+                                new_enc_layers.append(candidate)       # append new border
+                                final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
+                                new_visited_list = append_visited_domain(parsed, my_top)
+                                enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
+                                self.sock.sendto(enc_pkt, (self.host, int(self.name_to_port[alias])))
+                                # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
+                                # CHANGED: Store border_router (candidate) in pending_interests for later use in ACK handling
+                                # key = (original_name, src_name, seq_num)
+                                # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
+                                self.pending_interests[parsed["Name"]] = {
+                                    "addr": addr,
+                                    "origin": src_name,
+                                    "border_router": candidate,
+                                    "seq_num": seq_num,    # optional, can help with duplicates
+                                    "ts": time.time()
+                                }
+                                with _PRINT_LOCK:
+                                    print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                    self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to alias {alias} - {e}")
                             self.log(f" Error forwarding INTEREST to alias {alias} - {e}")
@@ -1042,10 +1042,10 @@ class NameServer:
                 route_name = dest_node
                 payload_obj = {"ok": False, "reason": "NameNotFound", "src": src_name, "dest": dest_node}
                 payload = json.dumps(payload_obj)
-                resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=payload, flags=ACK_FLAG)
-                self.sock.sendto(resp, addr)
-                print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
-                self.log(f" No path. Sent DATA(NameNotFound) to {addr}")
+                # resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=payload, flags=ACK_FLAG)
+                # self.sock.sendto(resp, addr)
+                # print(f"[NS {self.ns_name}] No path. Sent DATA(NameNotFound) to {addr}")
+                # self.log(f" No path. Sent DATA(NameNotFound) to {addr}")
 
                 err_pkt = create_error_packet(seq_num, original_name, NAME_ERROR, src_name)
                 try:

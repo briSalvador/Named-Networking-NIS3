@@ -12,11 +12,17 @@ from collections import deque
 
 _print_lock = threading.Lock()
 _original_print = builtins.print
+_global_log_buffer = []
+
 def _thread_safe_print(*args, **kwargs):
     # always flush so ordering is visible immediately
     kwargs.setdefault("flush", True)
     with _print_lock:
         _original_print(*args, **kwargs)
+        message = ' '.join(str(arg) for arg in args)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        _global_log_buffer.append((timestamp, message))
+        
 # Replace built-in print for this process so all prints are serialized
 builtins.print = _thread_safe_print
 
@@ -175,6 +181,14 @@ def parse_interest_packet(packet):
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
 
+    name_segments = name.strip('/').split('/') if isinstance(name, str) else []
+    if name_segments and '.' in name_segments[-1]:
+        file_name = name_segments[-1]
+        node_name = '/' + '/'.join(name_segments[:-1]) if len(name_segments) > 1 else '/' + name_segments[0]
+    else:
+        file_name = None
+        node_name = '/' + '/'.join(name_segments) if name_segments else name
+
     return {
         "PacketType": packet_type,
         "Flags": flags,
@@ -183,6 +197,8 @@ def parse_interest_packet(packet):
         "Name": name,
         "OriginNode": origin_node,
         "DataFlag": data_flag,
+        "NodeName": node_name,
+        "FileName": file_name,
         "VisitedDomains": visited_domains,
     }
 
@@ -1203,6 +1219,49 @@ class Node:
             print(f"[{self.name}] Error handling HELLO from {neighbor_name}: {e}")
             self.log(f"[{self.name}] Error handling HELLO from {neighbor_name}: {e}")
 
+    def get_node_name(self, name):
+        # Return the node/alias that corresponds to the destination namespace.
+        # For ENCAPs return the candidate border alias; otherwise return top-level or first path component.
+        if not isinstance(name, str) or name == "":
+            return name
+
+        if name.startswith("ENCAP:"):
+            try:
+                enc = name.split(":", 1)[1]
+                candidate = enc.split("|", 1)[0]
+                # candidate may contain space-separated aliases, return the first alias token
+                return candidate.split()[0]
+            except Exception:
+                pass
+
+        # Handle normal path-like strings
+        name = name.strip('/')
+        if not name:
+            return '/'
+
+        parts = name.split('/')
+        last_part = parts[-1]
+
+        # Check if the last part looks like a file (has a '.' that's not at start or end)
+        if '.' in last_part and not last_part.startswith('.') and not last_part.endswith('.'):
+            # Remove the filename part
+            path_without_file = '/'.join(parts[:-1])
+            return '/' + path_without_file if path_without_file else '/'
+        else:
+            # It's a folder or doesn't have an extension
+            return '/' + name
+    
+    def _has_asked_ns(self, dest_name):
+        # Return True if this node has already sent an NS query for dest_name
+        try:
+            with self.buffer_lock:
+                for entry in self.buffer:
+                    if entry.get("destination") == dest_name and entry.get("forwarded_to_ns"):
+                        return True
+        except Exception:
+            pass
+        return False
+
     def receive_packet(self, packet, addr=None):
         packet_type = (packet[0] >> 4) & 0xF
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
@@ -1404,9 +1463,22 @@ class Node:
                 if target_port:
                     try:
                         if parsed["Flags"] != 0x1:
-                            self.sock.sendto(packet, ("127.0.0.1", target_port))
                             self.log(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
                             print(f"[{self.name}] Forwarded ENCAP packet for {enc_name} toward border {enc_border} at port {target_port}")
+                            try:
+                                full_key = parsed.get("Name")
+                                if full_key:
+                                    self.ns_query_table.setdefault(full_key, [])
+                                    exists = any(item.get("port") == addr[1] for item in self.ns_query_table[full_key])
+                                    if not exists:
+                                        self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
+                                        self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                        print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
+                                        print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
+                            except Exception as e:
+                                self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
+                            
+                            self.sock.sendto(packet, ("127.0.0.1", target_port))
                             #self.ns_query_table[parsed["Name"]].append({"port": addr[1], "ack_only": False})
                             return
                     except Exception as e:
@@ -1523,49 +1595,6 @@ class Node:
                         print(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
                         self.log(f"[{self.name}] Updated PIT for {pkt_obj.name} with new interface: {addr[1]}")
 
-            def get_node_name(name):
-                # Return the node/alias that corresponds to the destination namespace.
-                # For ENCAPs return the candidate border alias; otherwise return top-level or first path component.
-                if not isinstance(name, str) or name == "":
-                    return name
-
-                if name.startswith("ENCAP:"):
-                    try:
-                        enc = name.split(":", 1)[1]
-                        candidate = enc.split("|", 1)[0]
-                        # candidate may contain space-separated aliases, return the first alias token
-                        return candidate.split()[0]
-                    except Exception:
-                        pass
-
-                # Handle normal path-like strings
-                name = name.strip('/')
-                if not name:
-                    return '/'
-
-                parts = name.split('/')
-                last_part = parts[-1]
-
-                # Check if the last part looks like a file (has a '.' that's not at start or end)
-                if '.' in last_part and not last_part.startswith('.') and not last_part.endswith('.'):
-                    # Remove the filename part
-                    path_without_file = '/'.join(parts[:-1])
-                    return '/' + path_without_file if path_without_file else '/'
-                else:
-                    # It's a folder or doesn't have an extension
-                    return '/' + name
-            
-            def _has_asked_ns(dest_name):
-                # Return True if this node has already sent an NS query for dest_name
-                try:
-                    with self.buffer_lock:
-                        for entry in self.buffer:
-                            if entry.get("destination") == dest_name and entry.get("forwarded_to_ns"):
-                                return True
-                except Exception:
-                    pass
-                return False
-
             # Check if destination is a direct neighbor
             neighbor_port = self.name_to_port.get(node_name)
             allow_direct = False
@@ -1574,7 +1603,7 @@ class Node:
                     allow_direct = True
                 elif is_real_interest:
                     # permit only if we've previously queried NS for this dest or we already have a FIB
-                    if parsed["Name"] in self.fib or _has_asked_ns(parsed["Name"]):
+                    if parsed["Name"] in self.fib or self._has_asked_ns(parsed["Name"]):
                         allow_direct = True
 
             if neighbor_port is not None and allow_direct:
@@ -1754,7 +1783,7 @@ class Node:
                 # Allow direct-forward when this node itself is directly connected to the destination
                 # (special-case: node is adjacent to the dest) — this executes only in the pre-NS path.
                 if is_real_interest:
-                    node_name = get_node_name(parsed["Name"])
+                    node_name = self.get_node_name(parsed["Name"])
                     print(f"[{self.name}] node_name: {node_name} extracted from Interest name {parsed['Name']}")
                     neighbor_port = self.name_to_port.get(node_name)
                     if neighbor_port is not None:
@@ -1923,7 +1952,7 @@ class Node:
                         self.log(f"[{self.name}] BORDER: No suitable NS found for {parsed['Name']}")
                         return
 
-            elif table == "CS":
+            if table == "CS":
                 print(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.log(f"[{self.name}] Data found in CS for {parsed['Name']}, sending DATA back to {addr}")
                 self.remove_pit(pkt_obj.name, addr[1])
@@ -2110,6 +2139,7 @@ class Node:
             dest_name = parsed_ack.get("Name")
             self.log(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
             print(f"[{self.name}] Received ROUTE_ACK for {dest_name} from {addr}")
+            #print(f"[{self.name}] ROUTE_ACK NS Query List: {self.ns_query_table}")
 
             # Forward the ack toward all recorded NS-query interfaces (propagate ack upstream)
             # Try exact lookup first, then tolerant matches (handles stripped vs full-encap keys).
@@ -2379,7 +2409,7 @@ class Node:
                                         real_pkt = create_interest_packet(seq, dest, flags, origin_node=origin_node, data_flag=True)
                                         entry["packet"] = real_pkt
                                     except Exception:
-                                        # If parsing fails, leave packet as-is
+                                        print("Failed")
                                         pass
                                     entry["next_hop"] = nh
                                     entry["status"] = "resolved"
@@ -2387,7 +2417,6 @@ class Node:
                                     self.log(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
                                     print(f"[{self.name}] Marked buffered entry for {dest} resolved -> next_hop {nh}")
                                     forwarded_local.append(entry)
-                                    print("hello")
                     except Exception as e:
                         print(f"[{self.name}] Error storing FIB from NS reply: {e}")
                 else:
@@ -2660,14 +2689,24 @@ class Node:
                 dest_name = parsed.get("Name")
                 pending_ifaces = self.ns_query_table.get(dest_name, [])
                 if pending_ifaces:
-                    for p in list(pending_ifaces):
+                    # iterate entries which may be ints/str ports or dicts {"port":..., "ack_only":...}
+                    for entry in list(pending_ifaces):
                         try:
-                            print(f"[{self.name}] Forwarded NAME_ERROR for {dest_name} to NS-query iface port {p}")
-                            self.log(f"[{self.name}] Forwarded NAME_ERROR for {dest_name} to NS-query iface port {p}")
-                            self.sock.sendto(packet, ("127.0.0.1", int(p)))
+                            # normalize to port
+                            if isinstance(entry, dict):
+                                port = entry.get("port")
+                            else:
+                                port = entry
+
+                            if port is None:
+                                self.log(f"[{self.name}] Skipping NAME_ERROR forward for {dest_name}: no port in entry {entry}")
+                                continue
+
+                            self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                            print(f"[{self.name}] Forwarded NAME_ERROR for {dest_name} to NS-query iface port {port}")
+                            self.log(f"[{self.name}] Forwarded NAME_ERROR for {dest_name} to NS-query iface port {port}")
                         except Exception as e:
-                            #print(f"[{self.name}] Error forwarding NAME_ERROR to NS-query iface {p}: {e}")
-                            self.log(f"[{self.name}] Error forwarding NAME_ERROR to NS-query iface {p}: {e}")
+                            self.log(f"[{self.name}] Error forwarding NAME_ERROR to NS-query iface {entry}: {e}")
                     # clear recorded pending query interfaces for this destination
                     try:
                         del self.ns_query_table[dest_name]
@@ -2696,7 +2735,7 @@ class Node:
                     return
                 else:
                     print(f"[{self.name}] RECEIVED ERROR: {err_text} for '{err_name}' seq={seq} at {timestamp}")
-            return None
+            return
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
             self.log(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
