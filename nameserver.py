@@ -1064,6 +1064,8 @@ class NameServer:
                 "path": path,
                 "dest": original_name,
                 "next_hop": next_hop,
+                "hop_count": max(0, len(path) - 1) if isinstance(path, (list, tuple)) else 0
+
             }
             if parsed["Flags"] == 0x1:
                 ack_pkt = create_route_ack_packet(
@@ -1258,6 +1260,7 @@ class NameServer:
                 "path": path_from_origin,
                 "dest": original_target,
                 "next_hop": first_hop_border,
+               "hop_count": max(0, len(path_from_origin) - 1) if isinstance(path_from_origin, (list, tuple)) else 0
             }
 
             resp = create_route_data_packet(
@@ -1350,7 +1353,8 @@ class NameServer:
                 "dest": original_target,
                 "next_hop": first_hop_border,
                 "path_to_origin": path_to_origin,
-                "note": "ACK confirmed path via border router"
+                "note": "ACK confirmed path via border router",
+                "hop_count": max(0, len(path_from_origin) - 1) if isinstance(path_from_origin, (list, tuple)) else 0
             }
 
             resp = create_route_data_packet(

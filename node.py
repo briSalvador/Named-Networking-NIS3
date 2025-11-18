@@ -2332,8 +2332,26 @@ class Node:
                 if dest and next_hop_port:
                     try:
                         nh = int(next_hop_port)
-                        # store FIB so future forwarding uses it
-                        self.add_fib(dest, nh, exp_time=5000, hop_count=1)
+                        # Determine hop_count from the returned path (prefer parsed Path, fallback to RoutingInfoJson.path)
+                        hop_count = 1
+                        try:
+                            p = parsed.get("Path")
+                            if isinstance(p, list) and p:
+                                # hops = number of links = nodes_in_path - 1
+                                hop_count = max(1, len(p) - 1)
+                            else:
+                                ri = parsed.get("RoutingInfoJson")
+                                if isinstance(ri, dict):
+                                    ri_path = ri.get("path")
+                                    if isinstance(ri_path, list):
+                                        hop_count = max(1, len(ri_path) - 1)
+                                    elif isinstance(ri_path, str):
+                                        parts = [x.strip() for x in ri_path.split(",") if x.strip()]
+                                        hop_count = max(1, len(parts) - 1)
+                        except Exception:
+                            hop_count = 1
+                        # store FIB so future forwarding uses it (use computed hop_count)
+                        self.add_fib(dest, nh, exp_time=5000, hop_count=hop_count)
                         print(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
                         self.log(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
 
