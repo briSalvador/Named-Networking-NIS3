@@ -1090,6 +1090,20 @@ class Node:
         return True
     
     def add_fib(self, name, interface, exp_time, hop_count, source="HELLO"):
+        try:
+            norm = name
+            if isinstance(name, str) and name:
+                segs = name.strip('/').split('/')
+                if segs:
+                    last = segs[-1]
+                    # treat as filename if it contains a '.' that's not leading/trailing
+                    if '.' in last and not last.startswith('.') and not last.endswith('.'):
+                        # remove the filename (last segment)
+                        parent = '/'.join(segs[:-1])
+                        norm = '/' + parent if parent else '/'
+        except Exception:
+            norm = name
+
         # interface is the next hop port (int)
         entry = {
             "NextHops": interface,
@@ -1097,10 +1111,10 @@ class Node:
             "HopCount": hop_count,
             "Source": source
         }
-        if name not in self.fib:
-            self.fib[name] = entry
-        elif name in self.fib and hop_count < self.fib[name]["HopCount"]:
-            self.fib[name] = entry
+        if norm not in self.fib:
+            self.fib[norm] = entry
+        elif norm in self.fib and hop_count < self.fib[norm]["HopCount"]:
+            self.fib[norm] = entry
 
         #self.log(f"[{self.name}] FIB updated: {self.fib}")
 
