@@ -149,10 +149,6 @@ if __name__ == "__main__":
     # dcam1.add_cs(interest_name, "Hello from cam1")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
-    # acam1.add_cs(interest_name, "Hello from ADMU cam1")
-    # send_interest_via_ns(dcam1, seq_num=0, name=interest_name, data_flag=False)
-
     # # Test Case for /DLSU (used to check if name truncation is correct)
     # interest_name = "/DLSU/hello.txt"
     # dlsu.add_cs(interest_name, "Hello from DLSU!")
@@ -172,10 +168,15 @@ if __name__ == "__main__":
     # interest_name = "/UP/hello.txt"
     # up.add_cs(interest_name, "Hello from UP!")
 
-    # Test case for DLSU -> ADMU interdomain interests
+    # Test case for DLSU -> ADMU interdomain interests (from dpc1)
     # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
     # acam1.add_cs(interest_name, "Hello from acam!")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test case for DLSU -> ADMU interdomain interests (from dcam1)
+    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
+    # acam1.add_cs(interest_name, "Hello from acam")
+    # send_interest_via_ns(dcam1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test case for ADMU -> UP interdomain interests
     # interest_name = "/UP/Salcedo/PC1/hello.txt"
@@ -199,14 +200,17 @@ if __name__ == "__main__":
 
     # fib tables
     print("\n--- FIB Tables ---")
-    print("admu FIB: ", admu.fib)
-    print("goks FIB: ", goks.fib)
-    # print("henry FIB:", henry.fib)
+    print("dpc1 FIB:", dpc1.fib)
     # print("andrew FIB:", andrew.fib)
-    # print("dpc1 FIB:", dpc1.fib)
+    # print("goks FIB: ", goks.fib)
+    # print("henry FIB:", henry.fib)
     # print("dlsu FIB:", dlsu.fib)
+    # print("dcam1 FIB", dcam1.fib)
     # print("border router FIB: ", dxa.fib)
-    # print("Gonzaga FIB: ", gonzaga.fib)
+    # print("admu FIB: ", admu.fib)
+    # print("gonzaga FIB: ", gonzaga.fib)
+    # print("acam1 FIB", acam1.fib)
+    # print("salcedo FIB", salcedo.fib)
 
     print("\n--- PIT Tables ---")
     print("henry PIT:", henry.pit)

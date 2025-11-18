@@ -1068,18 +1068,34 @@ class NameServer:
 
             }
             if parsed["Flags"] == 0x1:
+                # Compute hop-count from the source border router to destination
+                # Prefer the first element in the ENCAP chain as the 'source border'
+                source_border = None
+                if enc_layers:
+                    source_border = enc_layers[0]
+                else:
+                    source_border = parsed.get("OriginNode") or src_name
+
+                try:
+                    border_to_dest_path = self._shortest_path(source_border, dest_node) if source_border else None
+                    if border_to_dest_path:
+                        hop_count_to_dest = max(0, len(border_to_dest_path) - 1)
+                    else:
+                        # fallback to path we computed earlier (src_name -> dest_node)
+                        hop_count_to_dest = max(0, len(path) - 1) if path else 0
+                except Exception:
+                    hop_count_to_dest = max(0, len(path) - 1) if path else 0
+
                 ack_pkt = create_route_ack_packet(
                             seq_num=seq_num,
                             name=parsed["Name"],
                             flags=0x0,
                             source_name=enc_border,
-                            hop_count=len(path),
+                            hop_count=hop_count_to_dest,
                             visited_domains=parsed.get("VisitedDomains", [])
                         )
-                print(f"[NS {self.ns_name}] Sent ROUTE_ACK for ENCAP name='{enc_name}' "
-                    f"(full='{parsed["Name"]}', hop_count={len(path)}) to {addr}")
-                self.log(f" Sent ROUTE_ACK for ENCAP name='{enc_name}' "
-                    f"(full='{parsed["Name"]}', hop_count={len(path)}) to {addr}")
+                print(f"[NS {self.ns_name}] Sent ROUTE_ACK for ENCAP name='{enc_name}' (full='{parsed.get('Name')}', hop_count={hop_count_to_dest}) to {addr}")
+                self.log(f" Sent ROUTE_ACK for ENCAP name='{enc_name}' (full='{parsed.get('Name')}', hop_count={hop_count_to_dest}) to {addr}")
                 self.sock.sendto(ack_pkt, addr)
             else:
                 resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
@@ -1140,6 +1156,9 @@ class NameServer:
         # if pending:
         #     print(f"[NS {self.ns_name}] Found pending ENCAP interest for {cleaned_ack_name}: {pending}")
 
+        # incoming hop count reported by the destination-side NameServer:
+        incoming_hops = parsed.get("HopCount", 0) or 0
+
         origin_node = pending["origin"]
         border_router = pending["border_router"]
         next_hop = pending["addr"][1]  # port of original requester
@@ -1156,12 +1175,25 @@ class NameServer:
 
         if next_hop and not is_dom:
             try:
+                # Compute hops between this NS's border context and the source NameServer's provided source_name (if present)
+                extra_hops = 0
+                try:
+                    src_name_in_ack = parsed.get("SourceName")
+                    if src_name_in_ack and border_router:
+                        path_between = self._shortest_path(border_router, src_name_in_ack)
+                        if path_between:
+                            extra_hops = max(0, len(path_between) - 1)
+                except Exception:
+                    extra_hops = 0
+
+                new_hop_count = int(incoming_hops) + int(extra_hops)
+
                 new_route_ack = create_route_ack_packet(
                     seq_num=seq_num,
                     name=cleaned_ack_name,
                     flags=0x0,
                     source_name=self.ns_name,
-                    hop_count=parsed.get("HopCount", 0),
+                    hop_count=new_hop_count,
                     visited_domains=visited_domains
                 )
                 print(f"[NS {self.ns_name}] Forwarded ROUTE_ACK → next hop (port {next_hop})")
@@ -1255,12 +1287,18 @@ class NameServer:
             #     "note": "ACK confirmed path via border router"
             # }
 
+            # When replying with ROUTE_DATA to the origin, include total hops:
+            # total_hops = incoming_hops (distance in destination domain from source-border->dest)
+            #            + hops from origin to the border_router (within this domain)
+            local_hops = max(0, len(path_from_origin) - 1) if isinstance(path_from_origin, (list, tuple)) else 0
+            total_hops = int(incoming_hops) + int(local_hops)
+
             route_payload = {
                 "origin_name": origin_node,
                 "path": path_from_origin,
                 "dest": original_target,
                 "next_hop": first_hop_border,
-               "hop_count": max(0, len(path_from_origin) - 1) if isinstance(path_from_origin, (list, tuple)) else 0
+               "hop_count": total_hops
             }
 
             resp = create_route_data_packet(

@@ -712,16 +712,19 @@ class Node:
 
         # If this node is included in the returned path, install a FIB entry pointing to the next hop in that path
         try:
-            if path and self.name in path:
+            # Only install metadata/path-based FIB entries when this ROUTE_DATA is NOT targeted to this node.
+            # If origin_name == self.name, this node will install the authoritative NS-provided hop_count later.
+            if origin_name != self.name and path and self.name in path:
                 idx = path.index(self.name)
                 if idx < len(path) - 1:
                     # next hop toward destination (from this node's perspective)
                     next_toward_dest = path[idx + 1]
                     port, resolved = self._resolve_port_by_name(next_toward_dest)
                     if port:
-                        # install FIB so real interests will be forwarded correctly going to dest
-                        self.add_fib(dest, port, exp_time=60000, hop_count=len(path) - idx - 1, source="NS")
-                        self.log(f"[{self.name}] Installed FIB for {dest} -> next hop {next_toward_dest} (port {port})")
+                        # install metadata FIB so real interests will be forwarded correctly toward dest.
+                        # mark source as "META" so it's distinguishable from authoritative NS entries.
+                        self.add_fib(dest, port, exp_time=60000, hop_count=len(path) - idx - 1, source="META")
+                        self.log(f"[{self.name}] Installed metadata FIB for {dest} -> next hop {next_toward_dest} (port {port})")
         except Exception as e:
             self.log(f"[{self.name}] Error installing FIB from ROUTE path: {e}")
 
@@ -1089,7 +1092,7 @@ class Node:
             self.log(f"[{self.name}] Sent DATA packet to {target}")
         return True
     
-    def add_fib(self, name, interface, exp_time, hop_count, source="HELLO"):
+    def add_fib(self, name, interface, exp_time, hop_count, source="HELLO", force=False):
         try:
             norm = name
             if isinstance(name, str) and name:
@@ -1111,7 +1114,8 @@ class Node:
             "HopCount": hop_count,
             "Source": source
         }
-        if norm not in self.fib:
+        # If force==True, always install/overwrite the FIB entry (used for authoritative NS replies)
+        if force or norm not in self.fib:
             self.fib[norm] = entry
         elif norm in self.fib and hop_count < self.fib[norm]["HopCount"]:
             self.fib[norm] = entry
@@ -2332,26 +2336,31 @@ class Node:
                 if dest and next_hop_port:
                     try:
                         nh = int(next_hop_port)
-                        # Determine hop_count from the returned path (prefer parsed Path, fallback to RoutingInfoJson.path)
-                        hop_count = 1
+                        ri = parsed.get("RoutingInfoJson")
+                        # Prefer explicit 'hop_count' reported by the NameServer (total hops to final dest).
+                        # If absent, fall back to derived path-length heuristics.
+                        hop_count = None
                         try:
-                            p = parsed.get("Path")
-                            if isinstance(p, list) and p:
-                                # hops = number of links = nodes_in_path - 1
-                                hop_count = max(1, len(p) - 1)
+                            if isinstance(ri, dict) and ("hop_count" in ri):
+                                hop_count = int(ri.get("hop_count", 0))
+                                # sanity: ensure non-negative
+                                hop_count = max(0, hop_count)
                             else:
-                                ri = parsed.get("RoutingInfoJson")
-                                if isinstance(ri, dict):
-                                    ri_path = ri.get("path")
-                                    if isinstance(ri_path, list):
-                                        hop_count = max(1, len(ri_path) - 1)
-                                    elif isinstance(ri_path, str):
-                                        parts = [x.strip() for x in ri_path.split(",") if x.strip()]
-                                        hop_count = max(1, len(parts) - 1)
+                                # Derive from provided path (path = nodes sequence; links = len-1)
+                                p = parsed.get("Path") or (ri.get("path") if isinstance(ri, dict) else None)
+                                if isinstance(p, list) and p:
+                                    hop_count = max(0, len(p) - 1)
+                                elif isinstance(p, str) and p:
+                                    parts = [s.strip() for s in p.split(",") if s.strip()]
+                                    hop_count = max(0, len(parts) - 1)
                         except Exception:
+                            hop_count = None
+                        # Last-resort default
+                        if hop_count is None:
                             hop_count = 1
-                        # store FIB so future forwarding uses it (use computed hop_count)
-                        self.add_fib(dest, nh, exp_time=5000, hop_count=hop_count)
+
+                        # Authoritative hop_count from NameServer — overwrite any earlier local-only entry.
+                        self.add_fib(dest, nh, exp_time=5000, hop_count=hop_count, source="NS", force=True)
                         print(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
                         self.log(f"[{self.name}] Stored FIB entry for {dest} -> next hop {nh}")
 
@@ -2403,14 +2412,11 @@ class Node:
                         del self.ns_query_table[dest_name]
 
                 # Also update FIB entry for the route packet name (metadata)
-                # Instead of using the sender's port (addr[1]) which can point back toward the origin
-                # (causing ping-pong), derive the correct next-hop for reaching the destination
-                # from the returned path. If this node appears in the path, set the FIB entry to
-                # the next node after this node (toward the destination).
+                # Also update FIB entry for the route packet name (metadata)
                 try:
                     path_list = pkt_obj.path or parsed.get("Path") or []
                     if isinstance(path_list, str):
-                        path_list = [p.strip() for p in path_list.split(",") if p.strip()]
+                        path_list = [p.strip() for p in path_list if p.strip()]
                     if path_list and self.name in path_list:
                         idx = path_list.index(self.name)
                         if idx < len(path_list) - 1:
@@ -2422,7 +2428,24 @@ class Node:
                                 if fib_entry:
                                     next_hop_port = fib_entry.get("NextHops")
                             if next_hop_port:
-                                self.add_fib(pkt_obj.name, int(next_hop_port), exp_time=5000, hop_count=len(path_list) - idx - 1)
+                                # Normalize packet name the same way add_fib() does so we detect authoritative NS entries
+                                try:
+                                    norm = pkt_obj.name
+                                    if isinstance(norm, str) and norm:
+                                        segs = norm.strip('/').split('/')
+                                        if segs:
+                                            last = segs[-1]
+                                            if '.' in last and not last.startswith('.') and not last.endswith('.'):
+                                                parent = '/'.join(segs[:-1])
+                                                norm = '/' + parent if parent else '/'
+                                except Exception:
+                                    norm = pkt_obj.name
+                                # If an authoritative NS-provided FIB already exists for this normalized name, do NOT overwrite it
+                                existing = self.fib.get(norm)
+                                if existing and existing.get("Source") == "NS":
+                                    self.log(f"[{self.name}] Skipping metadata FIB install for {pkt_obj.name} because authoritative NS FIB exists (norm={norm})")
+                                else:
+                                    self.add_fib(pkt_obj.name, int(next_hop_port), exp_time=5000, hop_count=len(path_list) - idx - 1)
                     else:
                         # fallback: if node not in path, avoid installing a route that points back
                         # to the sender. Only install if we can resolve a sensible next-hop.
@@ -2433,7 +2456,23 @@ class Node:
                         if declared_next:
                             possible_next = self.name_to_port.get(declared_next) or (self.fib.get(declared_next) or {}).get("NextHops")
                         if possible_next:
-                            self.add_fib(pkt_obj.name, int(possible_next), exp_time=5000, hop_count=len(path_list))
+                            # Respect any existing NS-provided FIB entry and avoid overwriting it
+                            try:
+                                norm = pkt_obj.name
+                                if isinstance(norm, str) and norm:
+                                    segs = norm.strip('/').split('/')
+                                    if segs:
+                                        last = segs[-1]
+                                        if '.' in last and not last.startswith('.') and not last.endswith('.'):
+                                            parent = '/'.join(segs[:-1])
+                                            norm = '/' + parent if parent else '/'
+                            except Exception:
+                                norm = pkt_obj.name
+                            existing = self.fib.get(norm)
+                            if existing and existing.get("Source") == "NS":
+                                self.log(f"[{self.name}] Skipping fallback metadata FIB install for {pkt_obj.name} because authoritative NS FIB exists (norm={norm})")
+                            else:
+                                self.add_fib(pkt_obj.name, int(possible_next), exp_time=5000, hop_count=len(path_list))
                 except Exception as e:
                     # If anything fails, fall back to not installing a bad FIB entry.
                     self.log(f"[{self.name}] Failed to install FIB from ROUTE META: {e}")
