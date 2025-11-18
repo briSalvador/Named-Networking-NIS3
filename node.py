@@ -12,11 +12,17 @@ from collections import deque
 
 _print_lock = threading.Lock()
 _original_print = builtins.print
+_global_log_buffer = []
+
 def _thread_safe_print(*args, **kwargs):
     # always flush so ordering is visible immediately
     kwargs.setdefault("flush", True)
     with _print_lock:
         _original_print(*args, **kwargs)
+        message = ' '.join(str(arg) for arg in args)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        _global_log_buffer.append((timestamp, message))
+        
 # Replace built-in print for this process so all prints are serialized
 builtins.print = _thread_safe_print
 
