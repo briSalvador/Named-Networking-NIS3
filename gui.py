@@ -178,10 +178,107 @@ HIGHLIGHT_RULES = [
     ("pit_table_snapshot", r"PIT TABLE SNAPSHOT"),
     ("cs_table_snapshot", r"CS TABLE SNAPSHOT"),
 
-
-
+    ("interest_initiated", r"Initiating Interest for"),
+    ("fib_hit", r"FIB HIT: REAL_INTEREST"),
+    ("pit_entry_added", r"Added PIT entry for"),
+    ("ns_query_redirect", r"NS QUERY redirect"),
+    ("buffered_originated", r"Buffered originated interest for"),
+    ("skipped_forwarding", r"Skipped forwarding .* back to incoming iface"),
+    ("destination_direct_neighbor", r"Destination .* is a direct neighbor"),
+    ("sent_dropped_error", r"Sent DROPPED_ERROR for"),
+    ("sent_error_data_not_found", r"Sent ERROR \(Data Not Found\) for"),
+    ("ignoring_ns_query_registration", r"Ignoring ns_query_table registration"),
+    ("ignored_registering", r"Ignored registering"),
+    ("routed_interest_flag", r"Routed INTEREST with 0x1 flag"),
+    ("asked_own_ns", r"Asked own NS"),
+    ("registered_ack_only", r"Registered ack-only NS query"),
+    ("forwarded_interdomain", r"Forwarded interdomain interest"),
+    ("border_ns_query", r"BORDER NS QUERY"),
+    ("border_no_suitable_ns", r"BORDER: No suitable NS found"),
+    
+    ("route_ack_received", r"Received ROUTE_ACK"),
+    ("route_ack_forwarded", r"Forwarded ROUTE_ACK"),
+    ("no_pending_ns_query", r"No pending NS-query interfaces"),
+    ("sent_route_ack_encap", r"Sent ROUTE_ACK for .* to ENCAP origin"),
+    ("sent_route_ack_ns_query", r"Sent ROUTE_ACK for .* to NS-query iface"),
+    
+    ("error_received", r"Received ERROR"),
+    ("format_error_received", r"FORMAT_ERROR received"),
+    ("forwarded_name_error", r"Forwarded NAME_ERROR"),
+    ("forwarded_error_dropped", r"Forwarded ERROR \(Packet Dropped\)"),
+    ("forwarded_error_not_found", r"Forwarded ERROR \(Data Not Found\)"),
+    
+    ("resolved_next_hop_own_port", r"Resolved next_hop_port == self\.port|Next hop resolved to own port"),
+    ("forwarded_route_next_hop", r"Forwarded ROUTE_DATA to next_hop"),
+    ("forwarded_route_explicit", r"Forwarded ROUTE DATA \(explicit next_hop_port"),
+    ("forwarded_buffered_interest", r"Forwarded buffered interest for"),
+    ("cannot_resolve_port", r"Cannot resolve port for next_hop_name"),
+    ("marked_buffered_resolved", r"Marked buffered entry for .* resolved"),
+    
+    ("ns_sent_route", r"Sent ROUTE packet to"),
+    ("ns_no_border_routers", r"No border routers for domain"),
+    ("ns_failed_parse_interest", r"Failed to parse INTEREST"),
+    ("ns_sent_format_error", r"Sent FORMAT_ERROR to"),
+    ("ns_route_request", r"ROUTE REQ:"),
+    ("ns_preparing_route_reply", r"Preparing ROUTE_DATA reply"),
+    ("ns_no_pending_encap", r"No pending ENCAP interest for"),
+    ("ns_forwarded_route_ack", r"Forwarded ROUTE_ACK → next hop"),
+    
     # ns listener error
     ("ns_listener_err", r"\[NS .*] Listener error"),
+    
+    ("error_sending_real_interest", r"ERROR sending REAL_INTEREST to port"),
+    ("failed_forwarding_route_data", r"Failed forwarding ROUTE_DATA to"),
+    ("error_forwarding_buffered", r"Error forwarding buffered interests"),
+    ("error_forwarding_route_data", r"Error forwarding ROUTE_DATA to"),
+    ("error_forwarding_route_ack_iface", r"Error forwarding ROUTE_ACK to iface"),
+    ("error_forwarding_route_ack_ns", r"Error forwarding ROUTE_ACK to own NS"),
+    ("error_forwarding_route_response", r"Error forwarding ROUTE response to NS-query iface"),
+    ("failed_forwarding_to_target", r"Failed forwarding to .* :"),
+    ("error_forwarding_ns_query", r"Error forwarding NS query to"),
+    ("error_forwarding_interest_query_ns", r"Error forwarding INTEREST query to NS"),
+    
+    ("ns_failed_send_format_error", r"Failed to send FORMAT_ERROR to"),
+    ("ns_error_forwarding_interest", r"Error forwarding INTEREST to .* :"),
+    ("ns_error_forwarding_interest_alias", r"Error forwarding INTEREST to alias"),
+    ("ns_failed_send_name_error", r"Failed to send NAME_ERROR to"),
+    ("ns_error_forwarding_ack", r"Error forwarding ACK to:"),
+    ("ns_failed_send_route", r"Failed to send ROUTE to origin"),
+    ("ns_failed_send_route_data", r"Failed to send ROUTE_DATA to origin"),
+    
+    ("forwarded_route_data_pit_port", r"Forwarded ROUTE DATA to PIT port"),
+    ("ns_sent_route_with_next_hop", r"Sent ROUTE \(next_hop=.*\) to"),
+    ("ns_sent_route_ack_encap", r"Sent ROUTE_ACK for ENCAP name="),
+    ("ns_received_route_ack_for", r"Received ROUTE_ACK for .* from"),
+    
+    ("forwarded_route_data_next_hop", r"Forwarded ROUTE_DATA to next_hop"),
+    ("forwarded_route_data_explicit", r"Forwarded ROUTE DATA \(explicit next_hop_port="),
+    ("forwarded_route_data_path_origin", r"Forwarded ROUTE DATA along path_to_origin"),
+    ("forwarded_route_data_ns_query", r"Forwarded ROUTE DATA for .* to NS-query iface"),
+    ("forwarded_route_data_prev_hop", r"Forwarded ROUTE DATA for .* to previous hop"),
+    ("forwarded_route_data_origin", r"Forwarded ROUTE DATA directly to origin"),
+    ("forwarded_interest_next_hop", r"Forwarded INTEREST packet (for .* )?to next hop"),
+    ("forwarded_ns_query", r"Forwarded NS QUERY for"),
+    ("forwarded_query_neighbor", r"FORWARDED QUERY -> neighbor"),
+    ("forwarded_query_known", r"FORWARDED QUERY -> .* \(port \d+\) for"),
+    ("forwarded_error_pit", r"Forwarded ERROR .* for .* to PIT iface"),
+    
+    ("received_interest_port", r"Received INTEREST from port"),
+    ("received_route_data_timestamp", r"Received ROUTE DATA from .* at \d{4}"),
+    ("received_error_details", r"Received ERROR .* for .* seq="),
+    
+    ("received_packet_from", r"Received packet from \('"),
+    
+    ("ns_computed_path", r"Computed path_from_origin:.*path_to_origin:"),
+    ("ns_first_visited_domain", r"First visited domain matches NS domain:"),
+    ("ns_reduced_encap", r"Reduced ENCAP for ROUTE_ACK:"),
+    ("ns_suppressing_duplicate", r"Suppressing duplicate ENCAP for"),
+    ("ns_current_pending", r"Current Pending Interests:"),
+    
+    ("ns_query_table_display", r"ns_query_table:"),
+    ("ns_query_table_add", r"ns_query_table\[.*\] add iface"),
+    
+    ("sent_ns_query_seq", r"Sent NS QUERY \(seq=\d+\) for"),
 ]
 
 def _get_node_name(n):
@@ -257,35 +354,37 @@ class LogGUI:
 
     def _format_fib_table_for_node(self, node):
         fib = getattr(node, "fib", {}) or {}
-        headers = ["Pos", "Source", "Name", "NextHop", "HopCount", "Expiration"]
+        headers = ["Pos", "Name", "NextHop", "HopCount"]
         rows = []
         for idx, (name, info) in enumerate(fib.items(), start=1):
-            src = (
-                info.get("Source")
-                or info.get("OriginName")
-                or info.get("Origin")
-                or ""
-            )
             nh = info.get("NextHops", "")
             hc = info.get("HopCount", "")
-            exp = info.get("ExpirationTime", "")
-            rows.append([idx, src, name, nh, hc, exp])
+            rows.append([idx, name, nh, hc])
 
         if not rows:
-            rows.append(["-", "-", "(empty)", "-", "-", "-"])
+            rows.append(["-", "(empty)", "-", "-"])
 
         return self._format_table(headers, rows)
 
     # ui
     def _build_layout(self):
         self.root.configure(bg="white")
-        self.root.grid_columnconfigure(0, weight=4, uniform="col")
-        self.root.grid_columnconfigure(1, weight=2, uniform="col")
+        self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
+        # for resizable panels
+        self.paned_window = tk.PanedWindow(
+            self.root, 
+            orient=tk.HORIZONTAL, 
+            sashwidth=8,
+            bg="#cccccc",
+            sashrelief=tk.RAISED
+        )
+        self.paned_window.grid(row=0, column=0, sticky="nsew")
+
         # global logs
-        left_wrap = tk.Frame(self.root, bg="#e0e0e0")
-        left_wrap.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+        left_wrap = tk.Frame(self.paned_window, bg="#e0e0e0")
+        self.paned_window.add(left_wrap, minsize=400)
         left = tk.Frame(left_wrap, bg="#e0e0e0")
         left.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -347,6 +446,9 @@ class LogGUI:
             "ns_topology_saved", "ns_topology_warn",
             "ns_update_accept",
             "ns_interest_req", "ns_encap_forward", "ns_send_route",
+            "ns_sent_route", "ns_route_request", "ns_preparing_route_reply",
+            "ns_computed_path", "ns_first_visited_domain",
+            "ns_reduced_encap", "ns_suppressing_duplicate",
         ):
             self.log_text.tag_configure(tag, foreground="HotPink2")
 
@@ -359,8 +461,15 @@ class LogGUI:
             "interest_pit_add", "interest_pit_update",
             "interest_forward_fib", "interest_forward_direct",
             "encap_forward", "interest_sent", "data_fragment_sent", "data_sent",
+            "interest_initiated", "fib_hit", "pit_entry_added",
+            "destination_direct_neighbor", "route_ack_received", "route_ack_forwarded",
+            "ns_forwarded_route_ack",
             # ns
             "ns_encap_forward", "ns_send_route",
+            "forwarded_interest_next_hop", "forwarded_ns_query",
+            "forwarded_query_neighbor", "forwarded_query_known",
+            "forwarded_error_pit", "received_interest_port",
+            "received_error_details", "sent_ns_query_seq",
         ):
             self.log_text.tag_configure(tag, foreground="dark green")
 
@@ -371,7 +480,13 @@ class LogGUI:
                     "buffer_mark_resolved",
                     "buffer_snapshot", "route_debug", "route_buf_snapshot",
                     "route_buf_entry", "route_buf_match",
-                    "buffer_forwarded_real", "ns_query_recorded", "buffer_added_listener",):
+                    "buffer_forwarded_real", "ns_query_recorded", "buffer_added_listener",
+                    "buffered_originated", "forwarded_buffered_interest",
+                    "marked_buffered_resolved", "ignoring_ns_query_registration",
+                    "ignored_registering", "registered_ack_only",
+                    "forwarded_interdomain", "ns_query_redirect",
+                    "ns_query_table_display", "ns_query_table_add",
+                    "ns_current_pending", "received_packet_from"):
             self.log_text.tag_configure(tag, foreground="purple")
 
         # warnings
@@ -383,10 +498,15 @@ class LogGUI:
             "ns_route_missing", "encap_no_ns", "hello_no_domains",
             "neighbor_update_buf", "neighbor_no_domain_ns",
             "route_next_hop_unknown", "route_no_pit_direct_origin",
+            "skipped_forwarding", "sent_dropped_error", "sent_error_data_not_found",
+            "no_pending_ns_query", "cannot_resolve_port",
+            "resolved_next_hop_own_port", "routed_interest_flag",
+            "border_ns_query", "border_no_suitable_ns",
             # ns warnings
             "ns_update_missing", "ns_update_not_in_domain",
             "ns_target_not_local", "ns_name_not_found",
-            "ns_route_missing",
+            "ns_route_missing", "ns_no_border_routers",
+            "ns_no_pending_encap",
         ):
             self.log_text.tag_configure(tag, foreground="DarkGoldenrod3")
 
@@ -399,12 +519,15 @@ class LogGUI:
             "route_handle_exc", "process_buffer_exc",
             "buffer_entry_exc", "buffer_dump_exc",
             "unknown_packet",
+            "error_received", "format_error_received",
+            "forwarded_name_error", "forwarded_error_dropped", "forwarded_error_not_found",
+            "asked_own_ns",
             # ns errors
             "ns_topology_err", "ns_topology_write_err",
             "ns_error_hello_send", "ns_error_load_neighbors",
             "ns_failed_parse_update", "ns_error_handle_update",
             "ns_err_forward_interest", "ns_listener_err",
-            #additional
+            "ns_failed_parse_interest", "ns_sent_format_error",
             "ns_parse_neighbor_update_err", "neighbor_update_parse_err",
             "update_parse_err", "fib_install_route_path_err",
             "fib_store_ns_err", "buffer_send_err",
@@ -413,6 +536,15 @@ class LogGUI:
             "route_pit_port_err", "ns_update_send_err",
             "hello_handle_err", "encap_forward_err",
             "ns_query_send_err", "broadcast_listener_stopped",
+            "error_sending_real_interest", "failed_forwarding_route_data",
+            "error_forwarding_buffered", "error_forwarding_route_data",
+            "error_forwarding_route_ack_iface", "error_forwarding_route_ack_ns",
+            "error_forwarding_route_response", "failed_forwarding_to_target",
+            "error_forwarding_ns_query", "error_forwarding_interest_query_ns",
+            "ns_failed_send_format_error", "ns_error_forwarding_interest",
+            "ns_error_forwarding_interest_alias", "ns_failed_send_name_error",
+            "ns_error_forwarding_ack", "ns_failed_send_route",
+            "ns_failed_send_route_data",
         ):
             self.log_text.tag_configure(tag, foreground="red")
 
@@ -423,7 +555,16 @@ class LogGUI:
                     "route_direct_origin", "fib_installed", "fib_updated2",
                     "ns_send_route_pkt",
                     "route_pit_iface", "route_pit_port", 
-                    "fib_table_snapshot", "pit_table_snapshot", "cs_table_snapshot"):
+                    "fib_table_snapshot", "pit_table_snapshot", "cs_table_snapshot",
+                    "forwarded_route_next_hop", "forwarded_route_explicit",
+                    "sent_route_ack_encap", "sent_route_ack_ns_query",
+                    "forwarded_route_data_pit_port",
+                    "ns_sent_route_with_next_hop", "ns_sent_route_ack_encap",
+                    "ns_received_route_ack_for",
+                    "forwarded_route_data_next_hop", "forwarded_route_data_explicit",
+                    "forwarded_route_data_path_origin", "forwarded_route_data_ns_query",
+                    "forwarded_route_data_prev_hop", "forwarded_route_data_origin",
+                    "received_route_data_timestamp"):
             self.log_text.tag_configure(tag, foreground="blue")
 
         # -----------------------------------------------
@@ -454,8 +595,8 @@ class LogGUI:
         self.footer_box.bind("<Control-Return>", lambda e: None)
 
         # logs filter + node tables
-        right_wrap = tk.Frame(self.root, bg="#e0e0e0")
-        right_wrap.grid(row=0, column=1, sticky="nsew", padx=12, pady=12)
+        right_wrap = tk.Frame(self.paned_window, bg="#e0e0e0")
+        self.paned_window.add(right_wrap, minsize=300)
         right = tk.Frame(right_wrap, bg="#e0e0e0")
         right.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -627,28 +768,19 @@ class LogGUI:
         rows = []
 
         if mode == "FIB":
-            cols = ("source", "name", "next_hop", "hop_count", "expiration")
+            cols = ("name", "next_hop", "hop_count")
             self.table_tree["columns"] = cols
             for c in cols:
                 self.table_tree.heading(c, text=c.replace("_", " ").title())
-            self.table_tree.column("source", width=120, anchor="w")
-            self.table_tree.column("name", width=220, anchor="w")
-            self.table_tree.column("next_hop", width=80, anchor="center")
-            self.table_tree.column("hop_count", width=80, anchor="center")
-            self.table_tree.column("expiration", width=100, anchor="center")
+            self.table_tree.column("name", width=300, anchor="w")
+            self.table_tree.column("next_hop", width=120, anchor="center")
+            self.table_tree.column("hop_count", width=120, anchor="center")
 
             fib = getattr(node, "fib", {})
             for name, info in fib.items():
-                src = (
-                    info.get("Source")
-                    or info.get("OriginName")
-                    or info.get("Origin")
-                    or ""
-                )
                 nh = info.get("NextHops", "")
                 hc = info.get("HopCount", "")
-                exp = info.get("ExpirationTime", "")
-                rows.append((src, name, nh, hc, exp))
+                rows.append((name, nh, hc))
 
         elif mode == "CS":
             cols = ("name", "data")
@@ -1005,6 +1137,131 @@ class LogGUI:
                         header = f"[{node_name}] FIB TABLE SNAPSHOT:\n"
                         self.log_text.insert("end", header, ("fib_table_snapshot",))
                         self.log_text.insert("end", table_str + "\n")
+            
+            # prints FIB into tables
+            if " FIB: " in line and "{" in line:
+                parts = line.split(" FIB: ", 1)
+                if len(parts) == 2:
+                    node_label = parts[0].strip()
+                    fib_str = parts[1].strip()
+                    
+                    try:
+                        import ast
+                        fib_dict = ast.literal_eval(fib_str)
+                        
+                        if isinstance(fib_dict, dict) and fib_dict:
+                            max_name_len = max(len(name) for name in fib_dict.keys())
+                            max_name_len = max(max_name_len, len("Name"))
+                            
+                            table_lines = []
+                            table_lines.append(f"\n{node_label} FIB:")
+                            table_lines.append(f"  {'Name'.ljust(max_name_len)}  {'NextHop'.ljust(10)}  {'HopCount'.ljust(10)}")
+                            table_lines.append(f"  {'-' * max_name_len}  {'-' * 10}  {'-' * 10}")
+                            
+                            for name, info in fib_dict.items():
+                                next_hop = str(info.get('NextHops', ''))
+                                hop_count = str(info.get('HopCount', ''))
+                                table_lines.append(f"  {name.ljust(max_name_len)}  {next_hop.ljust(10)}  {hop_count.ljust(10)}")
+                            
+                            self.log_text.delete(start_index, end_index)
+                            self.log_text.insert(start_index, "\n".join(table_lines) + "\n")
+                    except:
+                        pass
+            
+            # prints neighbors into tables
+            if " neighbors:" in line and "{" in line:
+                parts = line.split(" neighbors:", 1)
+                if len(parts) == 2:
+                    node_label = parts[0].strip()
+                    neighbor_str = parts[1].strip()
+                    
+                    try:
+                        import ast
+                        neighbor_dict = ast.literal_eval(neighbor_str)
+                        
+                        if isinstance(neighbor_dict, dict) and neighbor_dict:
+                            max_name_len = max(len(name) for name in neighbor_dict.keys())
+                            max_name_len = max(max_name_len, len("Neighbor"))
+                            max_time_len = max(len(str(ts)) for ts in neighbor_dict.values())
+                            max_time_len = max(max_time_len, len("Last Seen"))
+                            
+                            table_lines = []
+                            table_lines.append(f"\n{node_label} neighbors:")
+                            table_lines.append(f"  {'Neighbor'.ljust(max_name_len)}  {'Last Seen'.ljust(max_time_len)}")
+                            table_lines.append(f"  {'-' * max_name_len}  {'-' * max_time_len}")
+                            
+                            for name, timestamp in neighbor_dict.items():
+                                table_lines.append(f"  {name.ljust(max_name_len)}  {str(timestamp).ljust(max_time_len)}")
+                            
+                            self.log_text.delete(start_index, end_index)
+                            self.log_text.insert(start_index, "\n".join(table_lines) + "\n")
+                    except:
+                        pass
+            
+            # prints parsed into tables
+            if line.startswith("Parsed:") and "{" in line:
+                parsed_str = line.split("Parsed:", 1)[1].strip()
+                
+                try:
+                    import ast
+                    parsed_dict = ast.literal_eval(parsed_str)
+                    
+                    if isinstance(parsed_dict, dict) and parsed_dict:
+                        max_key_len = max(len(str(k)) for k in parsed_dict.keys())
+                        max_key_len = max(max_key_len, len("Field"))
+                        max_val_len = max(len(str(v)) for v in parsed_dict.values())
+                        max_val_len = max(max_val_len, len("Value"))
+                        
+                        table_lines = []
+                        table_lines.append("\nParsed:")
+                        table_lines.append(f"  {'Field'.ljust(max_key_len)}  {'Value'.ljust(max_val_len)}")
+                        table_lines.append(f"  {'-' * max_key_len}  {'-' * max_val_len}")
+                        
+                        for key, value in parsed_dict.items():
+                            table_lines.append(f"  {str(key).ljust(max_key_len)}  {str(value).ljust(max_val_len)}")
+                        
+                        self.log_text.delete(start_index, end_index)
+                        self.log_text.insert(start_index, "\n".join(table_lines) + "\n")
+                except:
+                    pass
+            
+            # prints object into tables
+            if line.startswith("Object:") and "<" in line and ">" in line:
+                obj_str = line.split("Object:", 1)[1].strip()
+                
+                try:
+                    if obj_str.startswith("<") and obj_str.endswith(">"):
+                        content = obj_str[1:-1]
+                        parts = content.split(None, 1)
+                        
+                        if len(parts) == 2:
+                            class_name = parts[0]
+                            fields_str = parts[1]
+                            
+                            fields = {}
+                            for field_pair in fields_str.split():
+                                if "=" in field_pair:
+                                    key, val = field_pair.split("=", 1)
+                                    fields[key] = val
+                            
+                            if fields:
+                                max_key_len = max(len(str(k)) for k in fields.keys())
+                                max_key_len = max(max_key_len, len("Field"))
+                                max_val_len = max(len(str(v)) for v in fields.values())
+                                max_val_len = max(max_val_len, len("Value"))
+                                
+                                table_lines = []
+                                table_lines.append(f"\nObject: {class_name}")
+                                table_lines.append(f"  {'Field'.ljust(max_key_len)}  {'Value'.ljust(max_val_len)}")
+                                table_lines.append(f"  {'-' * max_key_len}  {'-' * max_val_len}")
+                                
+                                for key, value in fields.items():
+                                    table_lines.append(f"  {str(key).ljust(max_key_len)}  {str(value).ljust(max_val_len)}")
+                                
+                                self.log_text.delete(start_index, end_index)
+                                self.log_text.insert(start_index, "\n".join(table_lines) + "\n")
+                except:
+                    pass
 
             last_was_cmd = line.startswith("[CMD]") or line.startswith("[CMD-OUT]")
 
