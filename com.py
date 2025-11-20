@@ -179,14 +179,14 @@ if __name__ == "__main__":
     # send_interest_via_ns(dcam1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test case for ADMU -> UP interdomain interests
-    # interest_name = "/UP/Salcedo/PC1/hello.txt"
-    # upc1.add_cs(interest_name, "Hello from upc1!")
-    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
+    interest_name = "/UP/Salcedo/PC1/hello.txt"
+    upc1.add_cs(interest_name, "Hello from upc1!")
+    send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test case for DLSU -> UP interdomain interests
-    interest_name = "/UP/Salcedo/PC1/hello.txt"
-    upc1.add_cs(interest_name, "Hello from upc1")
-    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+    # interest_name = "/UP/Salcedo/PC1/hello.txt"
+    # upc1.add_cs(interest_name, "Hello from upc1")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # # Test Case if destination exists but file does not
     # interest_name = "/DLSU/Miguel/cam1/nothing_here.txt"

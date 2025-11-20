@@ -922,6 +922,7 @@ class NameServer:
                                 final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
 
                                 new_visited_list = append_visited_domain(parsed, my_top)
+                                print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
                                 enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
                                 self.sock.sendto(enc_pkt, (self.host, int(port)))
                                 # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
@@ -1171,6 +1172,7 @@ class NameServer:
 
         # Check if the first element of visited domains matches this NS domain
         visited_domains = parsed["VisitedDomains"]
+        print(f"[NS {self.ns_name}] Visited Domains List from ACK: {visited_domains}")
         is_dom = False
         if visited_domains and visited_domains[0] == ns_domain:
             print(f"[NS {self.ns_name}] First visited domain matches NS domain: {ns_domain}")
@@ -1282,7 +1284,7 @@ class NameServer:
             path_to_origin = self._shortest_path(self.ns_name, origin_node) or []
             first_hop_border = path_from_origin[1] if len(path_from_origin) > 1 else border_router
             first_hop_origin = path_to_origin[1] if len(path_to_origin) > 1 else None
-            print(f"[NS {self.ns_name}] Computed path_from_origin: {path_from_origin}, path_to_origin: {path_to_origin}")
+            #print(f"[NS {self.ns_name}] Computed path_from_origin: {path_from_origin}, path_to_origin: {path_to_origin}")
 
             # route_payload = {
             #     "origin_name": origin_node,
