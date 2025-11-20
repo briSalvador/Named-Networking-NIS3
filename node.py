@@ -1674,9 +1674,9 @@ class Node:
                         try:
                             # Query name = enc_border (we want NS to resolve that node)
                             query_pkt = create_interest_packet(parsed["SequenceNumber"], enc_border, parsed["Flags"], origin_node=self.name, data_flag=False)
-                            self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
                             self.log(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
                             print(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                            self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
                     
                             try:
                                 # CHANGED: Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
@@ -2598,7 +2598,6 @@ class Node:
                     if not self.ns_query_table[dest_name]:
                         del self.ns_query_table[dest_name]
 
-                # Also update FIB entry for the route packet name (metadata)
                 # Also update FIB entry for the route packet name (metadata)
                 try:
                     path_list = pkt_obj.path or parsed.get("Path") or []

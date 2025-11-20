@@ -218,6 +218,14 @@ def parse_interest_packet(packet):
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
 
+    name_segments = name.strip('/').split('/') if isinstance(name, str) else []
+    if name_segments and '.' in name_segments[-1]:
+        file_name = name_segments[-1]
+        node_name = '/' + '/'.join(name_segments[:-1]) if len(name_segments) > 1 else '/' + name_segments[0]
+    else:
+        file_name = None
+        node_name = '/' + '/'.join(name_segments) if name_segments else name
+
     return {
         "PacketType": packet_type,
         "Flags": flags,
@@ -226,6 +234,8 @@ def parse_interest_packet(packet):
         "Name": name,
         "OriginNode": origin_node,
         "DataFlag": data_flag,
+        "NodeName": node_name,
+        "FileName": file_name,
         "VisitedDomains": visited_domains,
     }
 
