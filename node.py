@@ -955,6 +955,7 @@ class Node:
                             dest_name = entry.get("destination") or entry.get("dest") or entry.get("Name")
                             next_hop = entry.get("next_hop")
                             pkt = entry.get("packet")
+                            addr = entry.get("addr")
                             entry_type = (pkt[0] >> 4) & 0xF if pkt else None
                             self.log(f"BUFFER_PROC checking dest={dest_name} status={entry_status} next_hop={next_hop}")
 
@@ -1064,7 +1065,25 @@ class Node:
                                 except Exception as e:
                                     self.log(f"BUFFER_REQUEUE_EXC: {e}")
                             elif entry_type == HELLO:
-                                self.receive_packet(entry.get("packet"), entry.get("addr"))
+                                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+                                parsed = parse_hello_packet(pkt)
+                                neighbor_name = parsed["Name"]
+                                self.neighbor_table[neighbor_name] = timestamp
+                                self.name_to_port[neighbor_name] = addr[1]
+                                print(f"[{self.name}] Reprocessing HELLO from {neighbor_name} at {addr}")
+                                self.log(f"[{self.name}] Reprocessing HELLO from {neighbor_name} at {addr}")
+
+                                if parsed["Flags"] == 0x0:
+                                    sender_domains = get_domains_from_name(neighbor_name)
+                                    ns_update_packet = create_ns_update_packet(neighbor_name, self.name, addr[1], 1)
+                                    self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
+                                                                            ns_update_packet, exclude_port=addr[1])
+                                    self.handle_hello_from_neighbor(neighbor_name, addr, pkt, timestamp)
+                                elif parsed["Flags"] == 0x1:
+                                    self.handle_hello_from_neighbor(neighbor_name, addr, pkt, timestamp)
+
+                                # Add neighbor to FIB
+                                self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=1)
                                 with self.buffer_lock:
                                     self.buffer.remove(entry)
                         except Exception as e:
@@ -2343,22 +2362,38 @@ class Node:
             self.log(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr} with parsed data: {parsed}")
             #print(f"[{self.name}] Received UPDATE from {neighbor_name} at {addr} with parsed data: {parsed}")
             if parsed["Flags"] == 0x1:
-                # BAND-AID SOLUTION, prevent update flooding by adding cooldown
-                now = time.time()
-                cooldown = 10  # seconds
-                last_time = self.last_update_received.get(neighbor_name, 0)
-                if now - last_time < cooldown:
-                    # Ignore NS UPDATE if within cooldown
-                    #print(f"[{self.name}] Ignored NS UPDATE from {neighbor_name} due to cooldown.")
-                    return
-                self.last_update_received[neighbor_name] = now
+                # Improved logic: only propagate NS UPDATE if this path offers a strictly lower hop count
+                # Lazy-init structure for tracking best known hop count to each advertised Name/neighbor
+                if not hasattr(self, "ns_hop_info"):
+                    self.ns_hop_info = {}
+
                 sender_domains = get_domains_from_name(neighbor_name)
-                hops = parsed["NumberOfHops"] + 1 if parsed["NumberOfHops"] else 1
-                ns_update_packet = create_ns_update_packet(neighbor_name, self.name, self.port, hops)
-                self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
-                                                        ns_update_packet, exclude_port=addr[1])
-                self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=hops)
-                self.name_to_port[neighbor_name] = addr[1]
+                new_hops = parsed["NumberOfHops"] + 1 if parsed["NumberOfHops"] else 1
+                current = self.ns_hop_info.get(neighbor_name)
+
+                should_propagate = (current is None) or (new_hops < current.get("hop_count", float('inf')))
+
+                if should_propagate:
+                    # Store improved path info
+                    self.ns_hop_info[neighbor_name] = {"hop_count": new_hops, "next_hop": addr[1]}
+                    # Build and send update packet outward to domain neighbors
+                    ns_update_packet = create_ns_update_packet(neighbor_name, self.name, self.port, new_hops)
+                    self.send_ns_update_to_domain_neighbors(
+                        neighbor_name,
+                        sender_domains,
+                        ns_update_packet,
+                        exclude_port=addr[1]
+                    )
+                    # Update local routing structures only on improvement
+                    self.add_fib(neighbor_name, addr[1], exp_time=5000, hop_count=new_hops)
+                    self.name_to_port[neighbor_name] = addr[1]
+                    self.log(f"[{self.name}] Accepted improved NS UPDATE for {neighbor_name}: hops={new_hops}")
+                    print(f"[{self.name}] Accepted improved NS UPDATE for {neighbor_name}: hops={new_hops}")
+                else:
+                    # Ignore non-improving update
+                    self.log(f"[{self.name}] Ignored NS UPDATE for {neighbor_name}: hops {new_hops} >= stored {current.get('hop_count')}")
+                    # Do not propagate further
+                    return
             elif parsed["Flags"] == 0x2:
                 # --- Handle NEIGHBOR UPDATE packets (forward to NameServer(s)) ---
                 parsed = parse_neighbor_update_packet(packet)
