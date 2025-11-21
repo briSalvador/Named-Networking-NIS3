@@ -1341,6 +1341,22 @@ class Node:
                     enc_border = None
                     enc_name = None
 
+            # --- EARLY ENCAP REGISTRATION -------------------------------------------------
+            # Ensure ENCAP interests are recorded in ns_query_table BEFORE any FIB/CS/PIT checks
+            # so that subsequent ROUTE_ACK or ROUTING_DATA packets can be forwarded upstream.
+            try:
+                if raw_interest_name.startswith("ENCAP:") and " " not in self.name:
+                    key = raw_interest_name  # preserve full ENCAP wrapper
+                    entry_list = self.ns_query_table.setdefault(key, [])
+                    # Avoid duplicate port entries
+                    if not any((isinstance(e, dict) and e.get("port") == addr[1]) or e == addr[1] for e in entry_list):
+                        entry_list.append({"port": addr[1], "ack_only": True})
+                        print(f"[{self.name}] Node Registered ENCAP interest '{key}' (ack-only) from iface {addr[1]}")
+                        self.log(f"[{self.name}] Node Registered ENCAP interest '{key}' (ack-only) from iface {addr[1]}")
+            except Exception as e:
+                self.log(f"[{self.name}] Failed early ENCAP registration: {e}")
+            # ------------------------------------------------------------------------------
+
             # If ENCAP exists, override dest_name
             if enc_name:
                 dest_name = enc_name
@@ -2259,45 +2275,48 @@ class Node:
             # Forward the ack toward all recorded NS-query interfaces (propagate ack upstream)
             # Try exact lookup first, then tolerant matches (handles stripped vs full-encap keys).
             pending = self.ns_query_table.get(dest_name)
+            print(f"[{self.name}] Current Pending Interests for ROUTE_ACK {dest_name}: {self.ns_query_table}")
+            print(f"[{self.name}] Matched pending interfaces for ROUTE_ACK {dest_name}: {pending}")
+            
             matched_key = dest_name
-            if not pending:
-                # attempt inner-name and ENCAP-normalized matches
-                for k, v in list(self.ns_query_table.items()):
-                    if not isinstance(k, str):
-                        continue
-                    # direct exact match
-                    if k == dest_name:
-                        pending = v
-                        matched_key = k
-                        break
-                    # ENCAP key that ends with "|<dest>"
-                    if k.endswith("|" + dest_name):
-                        pending = v
-                        matched_key = k
-                        break
-                    # if dest is inner part of an ENCAP key
-                    if k.startswith("ENCAP:") and "|" in k:
-                        try:
-                            _, inner = k.split("|", 1)
-                            inner = inner.strip()
-                            if inner == dest_name:
-                                pending = v
-                                matched_key = k
-                                break
-                        except Exception:
-                            pass
-                    # substring fallback (defensive)
-                    if dest_name in k:
-                        pending = v
-                        matched_key = k
-                        break
+            # if not pending:
+            #     # attempt inner-name and ENCAP-normalized matches
+            #     for k, v in list(self.ns_query_table.items()):
+            #         if not isinstance(k, str):
+            #             continue
+            #         # direct exact match
+            #         if k == dest_name:
+            #             pending = v
+            #             matched_key = k
+            #             break
+            #         # ENCAP key that ends with "|<dest>"
+            #         if k.endswith("|" + dest_name):
+            #             pending = v
+            #             matched_key = k
+            #             break
+            #         # if dest is inner part of an ENCAP key
+            #         if k.startswith("ENCAP:") and "|" in k:
+            #             try:
+            #                 _, inner = k.split("|", 1)
+            #                 inner = inner.strip()
+            #                 if inner == dest_name:
+            #                     pending = v
+            #                     matched_key = k
+            #                     break
+            #             except Exception:
+            #                 pass
+            #         # substring fallback (defensive)
+            #         if dest_name in k:
+            #             pending = v
+            #             matched_key = k
+            #             break
             if pending:
                 for entry in list(pending):
                     try:
                         p = int(entry.get("port"))
-                        self.sock.sendto(packet, ("127.0.0.1", p))
                         self.log(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to iface port {p}")
                         print(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to iface port {p}")
+                        self.sock.sendto(packet, ("127.0.0.1", p))
                     except Exception as e:
                         self.log(f"[{self.name}] Error forwarding ROUTE_ACK to iface {entry}: {e}")
                 # remove the recorded PIT for this matched key so subsequent acks don't reuse stale mapping

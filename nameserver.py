@@ -934,7 +934,6 @@ class NameServer:
                                 new_visited_list = append_visited_domain(parsed, my_top)
                                 print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
                                 enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
-                                self.sock.sendto(enc_pkt, (self.host, int(port)))
                                 # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
                                 # key = (original_name, src_name, seq_num)
                                 # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
@@ -948,9 +947,10 @@ class NameServer:
                                 }
                                 # Print the ENCAP-forwarded message and the pending table together
                                 with _PRINT_LOCK:
-                                    print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
-                                    self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                    print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {final_enc} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                    self.log(f" ENCAP-FORWARDED INTEREST for {final_enc} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_ns]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                                 #print(f"[NS {self.ns_name}] New Visited Domains List: {new_visited_list}")
+                                self.sock.sendto(enc_pkt, (self.host, int(port)))
                                 return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
@@ -987,7 +987,6 @@ class NameServer:
                                 final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
                                 new_visited_list = append_visited_domain(parsed, my_top)
                                 enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
-                                self.sock.sendto(enc_pkt, (self.host, int(port)))
                                 # key = (original_name, src_name, seq_num)
                                 # self.pending_interests[key] = {"addr": addr, "origin": src_name, "border_router": candidate, "ts": time.time()}
                                 self.pending_interests[parsed["Name"]] = {
@@ -1000,6 +999,7 @@ class NameServer:
                                 with _PRINT_LOCK:
                                     print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                                     self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate {candidate} via resolved {resolved_name} (port {port}) [path_from_src]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                self.sock.sendto(enc_pkt, (self.host, int(port)))
                                 return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to {resolved_name}:{port} - {e}")
@@ -1022,7 +1022,6 @@ class NameServer:
                                 final_enc = "ENCAP:" + "|".join(new_enc_layers + [original_name])
                                 new_visited_list = append_visited_domain(parsed, my_top)
                                 enc_pkt = create_interest_packet(seq_num=seq_num, name=final_enc, flags=0x0, origin_node=src_name, data_flag=False, visited_domains=new_visited_list)
-                                self.sock.sendto(enc_pkt, (self.host, int(self.name_to_port[alias])))
                                 # Cache pending ENCAP interest so we can reply when ROUTE_ACK arrives
                                 # CHANGED: Store border_router (candidate) in pending_interests for later use in ACK handling
                                 # key = (original_name, src_name, seq_num)
@@ -1037,6 +1036,7 @@ class NameServer:
                                 with _PRINT_LOCK:
                                     print(f"[NS {self.ns_name}] ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
                                     self.log(f" ENCAP-FORWARDED INTEREST for {original_name} -> candidate alias {alias} (port {self.name_to_port[alias]}) [candidate_alias]\n[NS {self.ns_name}] Current Pending Interests: {self.pending_interests}")
+                                self.sock.sendto(enc_pkt, (self.host, int(self.name_to_port[alias])))
                                 return
                         except Exception as e:
                             print(f"[NS {self.ns_name}] Error forwarding INTEREST to alias {alias} - {e}")
