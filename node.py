@@ -1536,7 +1536,7 @@ class Node:
                             right_domain = domain_parts[1].split("/")[1]
 
                             # Extract visited domains from the interest packet
-                            visited = set(parsed.get("VisitedDomains", []))
+                            visited = list(parsed.get("VisitedDomains", []))
 
                             # Determine which domain has NOT been visited
                             unvisited_domains = []
@@ -1579,7 +1579,7 @@ class Node:
                                         0x1,  # INTERDOMAIN flag
                                         origin_node=self.name,
                                         data_flag=False,
-                                        visited_domains=list(visited)  # <-- keep visited domains
+                                        visited_domains=visited  # <-- keep visited domains
                                     )
                                     
                                     try:

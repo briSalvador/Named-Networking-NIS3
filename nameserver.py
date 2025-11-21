@@ -424,7 +424,7 @@ def append_visited_domain(parsed, new_domain):
     Returns the updated list.
     """
     # Extract current visited domains
-    visited = parsed.get("VisitedDomains", [])
+    visited = list(parsed.get("VisitedDomains", []))
 
     # Only append if this domain has not been visited yet
     if new_domain not in visited:
