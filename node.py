@@ -1442,28 +1442,86 @@ class Node:
             if enc_name:
                 dest_name = enc_name
 
+# ...existing code...
             if enc_border:
                 # If this node is the border (one of its aliases), strip encapsulation and
                 # treat the Interest as if its Name is the original target.
                 if any(enc_border_part in self.name for enc_border_part in enc_border.split()):
-                    #parsed["Name"] = enc_name
-                    packet = create_interest_packet(parsed["SequenceNumber"], enc_name, parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=False)
+                    # Create a decapsulated INTEREST directed at the inner (original) name.
+                    # Keep origin_node as received so subsequent processing can record PIT entries.
+                    decap_name = enc_name if enc_name else parsed.get("Name")
+                    packet = create_interest_packet(parsed["SequenceNumber"], decap_name, parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=False)
                     is_real_interest = False
-                    
-                    # Record the ENCAP origin port for ack_only, so we can send ROUTE_ACK back when route is resolved
+
+                    # Record the ENCAP origin port in ns_query_table so ROUTE_ACKs can be propagated back.
                     try:
-                        # Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
-                        key = enc_name if enc_name else parsed.get("Name")
+                        key = decap_name
                         if key:
-                            self.ns_query_table.setdefault(key, [])
-                            exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
-                            if not exists:
-                                if not self._is_ns_port(addr[1]):
-                                    self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
-                                else:
-                                    self.log(f"[{self.name}] Ignored registering ack-only NS query for {key} from NS port {addr[1]}")
+                            lst = self.ns_query_table.setdefault(key, [])
+                            # store as dict so we can mark ack_only if needed later
+                            if not any(item.get("port") == addr[1] for item in lst):
+                                lst.append({"port": addr[1], "ack_only": True})
                     except Exception:
                         pass
+
+                    # If this node can already satisfy the decapsulated request locally (CS)
+                    # or knows a FIB next-hop for it, immediately send a ROUTE_ACK back to
+                    # the sender of the ENCAP (addr) so upstream can stop waiting.
+                    try:
+                        can_satisfy = False
+                        # 1) Check CS for the exact content name or a matching filename
+                        if isinstance(decap_name, str):
+                            # exact match
+                            if decap_name in self.cs:
+                                can_satisfy = True
+                            else:
+                                # if decap_name appears to contain a filename, check suffix matches
+                                parts = decap_name.strip('/').split('/')
+                                if parts and '.' in parts[-1]:
+                                    filename = parts[-1]
+                                    for k in self.cs.keys():
+                                        if k == decap_name or k.endswith('/' + filename) or k == filename:
+                                            can_satisfy = True
+                                            break
+
+                        # 2) Check routing tables (FIB) to see if we already have a route
+                        if not can_satisfy:
+                            table, entry = self.check_tables(decap_name)
+                            if table == "FIB" and entry:
+                                can_satisfy = True
+
+                        if can_satisfy:
+                            # Build ROUTE_ACK using the original ENCAP wrapper name so the upstream
+                            # NameServer / router can correlate the ACK with pending ENCAP entries.
+                            try:
+                                raw_encap = raw_interest_name if raw_interest_name else parsed.get("Name")
+                                ack_pkt = create_route_ack_packet(
+                                    seq_num=parsed.get("SequenceNumber", 0),
+                                    name=raw_encap,
+                                    flags=0x0,
+                                    source_name=self.name,
+                                    hop_count=0,
+                                    visited_domains=parsed.get("VisitedDomains", [])
+                                )
+                                self.log(f"[{self.name}] Consumed ENCAP for {decap_name}; stopping further forwarding.")
+                                print(f"[{self.name}] Consumed ENCAP for {decap_name}; stopping further forwarding.")
+                                self.sock.sendto(ack_pkt, addr)
+                                self.log(f"[{self.name}] Sent ROUTE_ACK (decap) for {raw_encap} to {addr}")
+                                print(f"[{self.name}] Sent ROUTE_ACK (decap) for {raw_encap} to {addr}")
+                                # Mark the recorded ns_query_table entry as ack sent so duplicates don't resend
+                                try:
+                                    lst = self.ns_query_table.get(key, [])
+                                    for item in lst:
+                                        if item.get("port") == addr[1]:
+                                            item["ack_only"] = False
+                                except Exception:
+                                    pass
+                            except Exception as e:
+                                self.log(f"[{self.name}] Failed to send decap ROUTE_ACK to {addr}: {e}")
+
+                            return
+                    except Exception as e:
+                        self.log(f"[{self.name}] Error evaluating decapsulated ENCAP at border: {e}")
                     
                     # --- Border router forwarding logic ---
                     # If this is a border node (has multiple domain aliases)
