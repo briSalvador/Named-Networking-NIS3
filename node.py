@@ -2173,6 +2173,13 @@ class Node:
                                 self.log(f"[{self.name}] Skipped forwarding reassembled DATA back to incoming iface {interface}")
                                 continue
 
+                            # If the PIT interface points to this node's own UDP port, deliver locally
+                            if int(interface) == int(self.port):
+                                # remove the PIT entry and treat as local delivery; do not send over UDP
+                                self.remove_pit(name, interface)
+                                self.log(f"[{self.name}] Delivered reassembled DATA locally (would have sent to self.port {self.port}); suppressing UDP send")
+                                continue
+                        
                             self.remove_pit(name, interface)
                             pkt = create_data_packet(parsed["SequenceNumber"], name, full_payload, parsed["Flags"], 1, 1)
                             self.sock.sendto(pkt, (self.host, interface))
@@ -2201,6 +2208,13 @@ class Node:
                             # remove PIT entry but don't send back to sender
                             self.remove_pit(name, interface)
                             self.log(f"[{self.name}] Skipped forwarding DATA back to incoming iface {interface}")
+                            continue
+
+                        # If the PIT interface points to this node's own UDP port, deliver locally
+                        if int(interface) == int(self.port):
+                            # remove the PIT entry and treat as local delivery; do not send over UDP
+                            self.remove_pit(name, interface)
+                            self.log(f"[{self.name}] Delivered reassembled DATA locally (would have sent to self.port {self.port}); suppressing UDP send")
                             continue
 
                         self.remove_pit(name, interface)
