@@ -48,77 +48,77 @@ if __name__ == "__main__":
             gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns, admu_ns, up_ns]
 
     # load all nodes
-    # for node in nodes:
-    #     # NameServers and Nodes both implement load_neighbors_from_file
-    #     try:
-    #         node.load_neighbors_from_file("neighbors.txt")
-    #     except Exception:
-    #         pass
-    # time.sleep(2)
+    for node in nodes:
+        # NameServers and Nodes both implement load_neighbors_from_file
+        try:
+            node.load_neighbors_from_file("neighbors.txt")
+        except Exception:
+            pass
+    time.sleep(2)
 
     # Start periodic HELLO / neighbor-file reload every 30 seconds.
     # This ensures NameServers and Nodes re-announce and re-learn neighbor ports.
-    def _periodic_hello_loop(all_nodes, interval=30):
-        while True:
-            for n in all_nodes:
-                try:
-                    # Both Node and NameServer implement load_neighbors_from_file
-                    n.load_neighbors_from_file("neighbors.txt")
-                except Exception:
-                    # ignore per-node failures (keep loop running)
-                    pass
-                # If a Node exposes a neighbor-discovery loop, start it once (daemon)
-                try:
-                    if hasattr(n, "start_neighbor_discovery") and callable(getattr(n, "start_neighbor_discovery")):
-                        # start_neighbor_discovery returns a thread; avoid starting multiple times
-                        if not getattr(n, "_neighbor_discovery_started", False):
-                            try:
-                                n.start_neighbor_discovery(interval=interval)
-                            except Exception:
-                                pass
-                            n._neighbor_discovery_started = True
-                except Exception:
-                    pass
-            time.sleep(interval)
+    # def _periodic_hello_loop(all_nodes, interval=30):
+    #     while True:
+    #         for n in all_nodes:
+    #             try:
+    #                 # Both Node and NameServer implement load_neighbors_from_file
+    #                 n.load_neighbors_from_file("neighbors.txt")
+    #             except Exception:
+    #                 # ignore per-node failures (keep loop running)
+    #                 pass
+    #             # If a Node exposes a neighbor-discovery loop, start it once (daemon)
+    #             try:
+    #                 if hasattr(n, "start_neighbor_discovery") and callable(getattr(n, "start_neighbor_discovery")):
+    #                     # start_neighbor_discovery returns a thread; avoid starting multiple times
+    #                     if not getattr(n, "_neighbor_discovery_started", False):
+    #                         try:
+    #                             n.start_neighbor_discovery(interval=interval)
+    #                         except Exception:
+    #                             pass
+    #                         n._neighbor_discovery_started = True
+    #             except Exception:
+    #                 pass
+    #         time.sleep(interval)
 
-    hello_thread = threading.Thread(target=_periodic_hello_loop, args=(nodes, 30), daemon=True)
-    hello_thread.start()
+    # hello_thread = threading.Thread(target=_periodic_hello_loop, args=(nodes, 30), daemon=True)
+    # hello_thread.start()
 
     # neighbor tables
-    print("\n--- Neighbor Tables ---")
-    print("dpc1 neighbors:", dpc1.get_neighbors())
-    print("andrew neighbors:", andrew.get_neighbors())
-    print("henry neighbors:", henry.get_neighbors())
-    print("border router neighbors: ", dxa.get_neighbors())
-    print("NameServer neighbors:", ns.get_neigbors())
+    # print("\n--- Neighbor Tables ---")
+    # print("dpc1 neighbors:", dpc1.get_neighbors())
+    # print("andrew neighbors:", andrew.get_neighbors())
+    # print("henry neighbors:", henry.get_neighbors())
+    # print("border router neighbors: ", dxa.get_neighbors())
+    # print("NameServer neighbors:", ns.get_neigbors())
 
     # tests buffer and queueing (temp)
-    """ NPU = 8
-    TOTAL_PACKETS = 50 
-    threads = []
+    # NPU = 8
+    # TOTAL_PACKETS = 50 
+    # threads = []
 
-    print(f"\n[TEST] Starting Buffer and Queueing Test...")
-    print(f"[CONFIG] NPU = {NPU}, Total Packets = {TOTAL_PACKETS}\n")
+    # print(f"\n[TEST] Starting Buffer and Queueing Test...")
+    # print(f"[CONFIG] NPU = {NPU}, Total Packets = {TOTAL_PACKETS}\n")
 
-    def send_fake_interest(i):
-        processing_unit = i % NPU
-        fake_name = f"/UP/UnknownTarget{processing_unit}"
-        seq_num = 1000 + i
-        andrew.send_interest(seq_num, fake_name, target=("127.0.0.1", 5003))
-        print(f"[TEST] Packet {i} handled by NPU {processing_unit}")
+    # def send_fake_interest(i):
+    #     processing_unit = i % NPU
+    #     fake_name = f"/UP/UnknownTarget{processing_unit}"
+    #     seq_num = 1000 + i
+    #     andrew.send_interest(seq_num, fake_name, target=("127.0.0.1", 5003))
+    #     print(f"[TEST] Packet {i} handled by NPU {processing_unit}")
 
-    for i in range(TOTAL_PACKETS):
-        t = threading.Thread(target=send_fake_interest, args=(i,))
-        t.start()
-        threads.append(t)
+    # for i in range(TOTAL_PACKETS):
+    #     t = threading.Thread(target=send_fake_interest, args=(i,))
+    #     t.start()
+    #     threads.append(t)
 
-    for t in threads:
-        t.join()
+    # for t in threads:
+    #     t.join()
 
-    print(f"\n[TEST] Sent {TOTAL_PACKETS} Interest packets distributed across {NPU} NPUs.")
-    print("[TEST] Buffer growth and FIFO processing sequence below...\n") """
+    # print(f"\n[TEST] Sent {TOTAL_PACKETS} Interest packets distributed across {NPU} NPUs.")
+    # print("[TEST] Buffer growth and FIFO processing sequence below...\n")
 
-    time.sleep(5)
+    # time.sleep(5)
 
     def _ns_for_origin(origin_node):
         """Return the NameServer object for origin based on its top-level domain."""
@@ -167,63 +167,78 @@ if __name__ == "__main__":
 
         origin_node.send_interest(seq_num=seq_num, name=name, target=target, data_flag=data_flag)
 
-    # # Standard Test Case
-    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
-    # dcam1.add_cs(interest_name, "Hello from cam1")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # # Test Case for /DLSU (used to check if name truncation is correct)
-    # interest_name = "/DLSU/hello.txt"
-    # dlsu.add_cs(interest_name, "Hello from DLSU!")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # # Test Case if destination is adjacent to at least one router on the way to the NS
-    # interest_name = "/DLSU/Miguel/hello.txt"
-    # miguel.add_cs(interest_name, "Hello from Miguel")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # # Test Case if within ADMU domain
+    # Test Case if within ADMU domain
     # interest_name = "/ADMU/hello.txt"
     # admu.add_cs(interest_name, "Hello from ADMU!")
     # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
 
-    # # Test Case if within UP domain
+    # Test Case if within UP domain
     # interest_name = "/UP/hello.txt"
     # up.add_cs(interest_name, "Hello from UP!")
-
-    # Test case for DLSU -> ADMU interdomain interests (from dpc1)
-    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
-    # acam1.add_cs(interest_name, "Hello from acam!")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test case for DLSU -> ADMU interdomain interests (from dcam1)
-    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
-    # acam1.add_cs(interest_name, "Hello from acam")
-    # send_interest_via_ns(dcam1, seq_num=0, name=interest_name, data_flag=False)
+    # send_interest_via_ns(upc1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test case for ADMU -> UP interdomain interests
-    interest_name = "/UP/Salcedo/PC1/hello.txt"
-    upc1.add_cs(interest_name, "Hello from upc1!")
-    send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
+    # interest_name = "/UP/Salcedo/PC1/hello.txt"
+    # upc1.add_cs(interest_name, "Hello from upc1!")
+    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test case for DLSU -> UP interdomain interests
+    # START HERE FOR DEMO
+
+    # Test Case if interest is localized in the DLSU domain
+    interest_name = "/DLSU/Miguel/cam1/hello.txt"
+    dcam1.add_cs(interest_name, "Hello from cam1")
+    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test Case to check the presence of a file in the CS (intradomain)
+    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
+    # dcam1.add_cs(interest_name, "Hello from cam1")
+    # send_interest_via_ns(andrew, seq_num=0, name=interest_name, data_flag=False)
+    # time.sleep(5)
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test Case to check the presence of a node in the PIT (intradomain)
+    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
+    # dcam1.add_cs(interest_name, "Hello from cam1")
+    # send_interest_via_ns(andrew, seq_num=0, name=interest_name, data_flag=False)
+    # time.sleep(5)
+    # interest_name = "/DLSU/Miguel/cam1/hi.txt"
+    # dcam1.add_cs(interest_name, "Hi from cam1")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test Case if interest is in an adjacent domain (DLSU->ADMU)
+    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
+    # acam1.add_cs(interest_name, "Hello from acam")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test Case to check the presence of a file in the CS (interdomain)
+    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
+    # acam1.add_cs(interest_name, "Hello from acam")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+    # time.sleep(5)
+    # send_interest_via_ns(dcam1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test Case if interest is in a non-adjacent domain (DLSU->UP)
     # interest_name = "/UP/Salcedo/PC1/hello.txt"
     # upc1.add_cs(interest_name, "Hello from upc1")
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # # Test Case if destination exists but file does not
+    # Test Case if destination does not exist
+    # interest_name = "/DLSU/Miguel/cam2/nothing_here.txt"
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test Case if destination exists but file does not
     # interest_name = "/DLSU/Miguel/cam1/nothing_here.txt"
     # send_interest_via_ns(goks, seq_num=0, name=interest_name, data_flag=False)
     
-    # # Test case if destination does not have a filename
+    # Test case if destination does not have a filename
     # interest_name = "/DLSU/Miguel/cam1"
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    time.sleep(5)
+    time.sleep(3)
 
     # fib tables
-    print("\n--- FIB Tables ---")
-    print("dpc1 FIB:", dpc1.fib)
+    # print("\n--- FIB Tables ---")
+    # print("dpc1 FIB:", dpc1.fib)
     # print("andrew FIB:", andrew.fib)
     # print("goks FIB: ", goks.fib)
     # print("henry FIB:", henry.fib)
@@ -235,11 +250,11 @@ if __name__ == "__main__":
     # print("acam1 FIB", acam1.fib)
     # print("salcedo FIB", salcedo.fib)
 
-    print("\n--- PIT Tables ---")
-    print("henry PIT:", henry.pit)
-    print("miguel PIT: ", miguel.pit)
-    print("dlsu PIT:", dlsu.pit)
-    print("goks PIT:", goks.pit)
+    # print("\n--- PIT Tables ---")
+    # print("henry PIT:", henry.pit)
+    # print("miguel PIT: ", miguel.pit)
+    # print("dlsu PIT:", dlsu.pit)
+    # print("goks PIT:", goks.pit)
 
 # DEBUGGING MENU 
 class DebugController:

@@ -1105,103 +1105,6 @@ class Node:
         print(f"[{self.name}] Initiating Interest for '{name}' (seq={seq_num}) origin={self.name}")
         self.log(f"Initiating Interest for '{name}' (seq={seq_num}) origin={self.name}")
 
-        # # Check routing tables for an immediate FIB hit
-        # table, data = self.check_tables(name)
-        # if table == "FIB" and data:
-        #     # Resolve next-hop port (entry may contain int or a name)
-        #     nh = data.get("NextHops")
-        #     target_port = None
-        #     try:
-        #         # direct integer
-        #         target_port = int(nh)
-        #     except Exception:
-        #         # lookup by name (aliases)
-        #         if isinstance(nh, str) and nh in self.name_to_port:
-        #             try:
-        #                 target_port = int(self.name_to_port[nh])
-        #             except Exception:
-        #                 target_port = None
-
-        #     if target_port:
-        #         # Create and send a REAL_INTEREST directly
-        #         real_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=True)
-        #         try:
-        #             self.sock.sendto(real_pkt, (self.host, target_port))
-        #             print(f"[{self.name}] FIB HIT: Created REAL_INTEREST (seq={seq_num}) for '{name}' -> next_hop port {target_port}")
-        #             self.log(f"FIB HIT: REAL_INTEREST seq={seq_num} '{name}' -> port {target_port}")
-        #             # record PIT entry locally so DATA can be forwarded back (origin is self)
-        #             if name not in self.pit:
-        #                 self.pit[name] = [target_port]
-        #                 print(f"[{self.name}] Added PIT entry for '{name}' with interface [{target_port}]")
-        #                 self.log(f"Added PIT entry for '{name}' with interface [{target_port}]")
-        #         except Exception as e:
-        #             print(f"[{self.name}] ERROR sending REAL_INTEREST to port {target_port}: {e}")
-        #             self.log(f"ERROR sending REAL_INTEREST to port {target_port}: {e}")
-        #         return real_pkt
-
-        # # No FIB hit → send NS QUERY (data_flag=False)
-        # # Build query packet (origin=self.name) — the driver/other callers might pass target NS port but
-        # # try to avoid sending directly to NS by choosing a first-hop neighbor if known.
-        # query_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=True)
-
-        # # Resolve whether the provided `target` looks like a NameServer port we know
-        # resolved_target = target
-        # try:
-        #     if target and isinstance(target, (list, tuple)) and int(target[1]) != 0:
-        #         ns_names = [n for n, p in self.name_to_port.items() if "NameServer" in n and int(p) == int(target[1])]
-        #     else:
-        #         ns_names = []
-        # except Exception:
-        #     ns_names = []
-
-        # if ns_names:
-        #     # prefer a neighbor first-hop toward the NS (neighbor_table keys map to names)
-        #     first_hop_port = None
-        #     first_hop_name = None
-        #     for nbr in list(self.neighbor_table.keys()):
-        #         p = self.name_to_port.get(nbr)
-        #         if p and int(p) != int(target[1]):
-        #             first_hop_port = int(p)
-        #             first_hop_name = nbr
-        #             break
-        #     # fallback: any known non-NS port
-        #     # if not first_hop_port:
-        #     #     for n, p in self.name_to_port.items():
-        #     #         try:
-        #     #             if int(p) != int(target[1]):
-        #     #                 first_hop_port = int(p)
-        #     #                 first_hop_name = n
-        #     #                 break
-        #     #         except Exception:
-        #     #             continue
-        #     # if first_hop_port:
-        #     #     resolved_target = (self.host, first_hop_port)
-        #     #     print(f"[{self.name}] NS QUERY: redirecting toward first-hop {first_hop_name} (port {first_hop_port}) instead of NS port {target[1]}")
-        #     #     self.log(f"NS QUERY redirect -> first-hop {first_hop_name} port {first_hop_port}")
-
-        # # Send the query toward the resolved target (first-hop or NS fallback)
-        # try:
-        #     # Record a PIT entry for this originated interest so that when DATA/ROUTE replies
-        #     # arrive they can be forwarded toward the interface we used to send the query.
-        #     try:
-        #         pit_iface = None
-        #         if isinstance(resolved_target, (list, tuple)) and int(resolved_target[1]) != 0:
-        #             pit_iface = int(resolved_target[1])
-        #         elif isinstance(resolved_target, int):
-        #             pit_iface = int(resolved_target)
-        #         if pit_iface:
-        #             if name not in self.pit:
-        #                 self.pit[name] = [pit_iface]
-        #                 print(f"[{self.name}] Added PIT entry for '{name}' with interface [{pit_iface}]")
-        #                 self.log(f"Added PIT entry for '{name}' with interface [{pit_iface}]")
-        #             else:
-        #                 if pit_iface not in self.pit[name]:
-        #                     self.pit[name].append(pit_iface)
-        #                     print(f"[{self.name}] Updated PIT for '{name}' with interface {pit_iface}")
-        #                     self.log(f"Updated PIT for '{name}' with interface {pit_iface}")
-        #     except Exception as _e:
-        #         self.log(f"[{self.name}] Failed to add PIT entry for originated interest {name}: {_e}")
-
         #self.add_to_buffer(query_pkt, resolved_target, reason="Originated Interest (NS query)")
         query_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=True)
         # self.log(f"[{self.name}] Buffered originated interest for '{name}' -> {resolved_target}")
@@ -1442,7 +1345,6 @@ class Node:
             if enc_name:
                 dest_name = enc_name
 
-# ...existing code...
             if enc_border:
                 # If this node is the border (one of its aliases), strip encapsulation and
                 # treat the Interest as if its Name is the original target.
@@ -1819,6 +1721,8 @@ class Node:
                     # Create and send DROPPED_ERROR packet to PIT interfaces
                     error_pkt = create_error_packet(parsed["SequenceNumber"], parsed["Name"], DROPPED_ERROR, origin_node=origin_node)
                     pit_ifaces = self.pit.get(parsed["Name"], [])
+                    self.log(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
+                    print(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
                     if pit_ifaces:
                         for iface_port in list(pit_ifaces):
                             self.log(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to PIT iface {iface_port}")
@@ -1827,11 +1731,9 @@ class Node:
                         self.remove_pit(parsed["Name"])
                     else:
                         # fallback: send to requester if PIT is missing
-                        self.sock.sendto(error_pkt, addr)
                         self.log(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to {addr} (no PIT entry)")
                         print(f"[{self.name}] Sent DROPPED_ERROR for '{parsed['Name']}' to {addr} (no PIT entry)")
-                    self.log(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
-                    print(f"[{self.name}] Dropped interest for {node_name} as it's a direct neighbor without filename")
+                        self.sock.sendto(error_pkt, addr)
                 return
             # Otherwise do not forward directly here; let the normal NS-query path handle it.
 
@@ -2004,15 +1906,15 @@ class Node:
                             pit_ifaces = self.pit.get(parsed["Name"], [])
                             if pit_ifaces:
                                 for iface_port in list(pit_ifaces):
-                                    self.sock.sendto(error_pkt, ("127.0.0.1", int(iface_port)))
                                     self.log(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to PIT iface {iface_port}")
                                     print(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to PIT iface {iface_port}")
+                                    self.sock.sendto(error_pkt, ("127.0.0.1", int(iface_port)))
                                 self.remove_pit(parsed["Name"])
                             else:
                                 # fallback: send to requester if PIT is missing
-                                self.sock.sendto(error_pkt, addr)
                                 self.log(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to {addr} (no PIT entry)")
                                 print(f"[{self.name}] Sent ERROR (Data Not Found) for '{file_name}' to {addr} (no PIT entry)")
+                                self.sock.sendto(error_pkt, addr)
                             return
                 # else: fall through to existing buffering + NS query logic
 
@@ -2935,21 +2837,23 @@ class Node:
                     name = parsed["Name"]
                     if pit_ifaces:
                         for iface_port in list(pit_ifaces):
-                            self.sock.sendto(packet, ("127.0.0.1", int(iface_port)))
-
                             if err_code == DROPPED_ERROR:
                                 self.log(f"[{self.name}] Forwarded ERROR (Packet Dropped) for '{name}' to PIT iface {iface_port}")
                                 print(f"[{self.name}] Forwarded ERROR (Packet Dropped) for '{name}' to PIT iface {iface_port}")
+                                self.sock.sendto(packet, ("127.0.0.1", int(iface_port)))
                             elif err_code == NO_DATA_ERROR:
                                 self.log(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
                                 print(f"[{self.name}] Forwarded ERROR (Data Not Found) for '{name}' to PIT iface {iface_port}")
+                                self.sock.sendto(packet, ("127.0.0.1", int(iface_port)))
                             else:
                                 self.log(f"[{self.name}] Forwarded ERROR for '{name}' to PIT iface {iface_port}")
                                 print(f"[{self.name}] Forwarded ERROR for '{name}' to PIT iface {iface_port}")
+                                self.sock.sendto(packet, ("127.0.0.1", int(iface_port)))
                         self.remove_pit(parsed["Name"])
                     return
                 else:
-                    print(f"[{self.name}] RECEIVED ERROR: {err_text} for '{err_name}' seq={seq} at {timestamp}")
+                    self.remove_pit(parsed["Name"])
+                    self.log(f"[{self.name}] Received ERROR for '{parsed['Name']}' — removed PIT entry")
             return
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")
@@ -3028,11 +2932,19 @@ class Node:
         # Exclude '/' from both strings before comparison
         s1 = s1.replace('/', '')
         s2 = s2.replace('/', '')
-        if len(s1) < len(s2):
+        # keep original lengths for extra missing-char penalty calculation
+        len1 = len(s1)
+        len2 = len(s2)
+
+        # Ensure s1 is the longer one for DP efficiency
+        if len1 < len2:
             return self.levenshtein_distance(s2, s1)
-        if len(s2) == 0:
-            return len(s1)
-        previous_row = range(len(s2) + 1)
+
+        if len2 == 0:
+            # base distance is all missing characters; we still add no extra penalty here
+            return len1
+
+        previous_row = list(range(len2 + 1))
         for i, c1 in enumerate(s1):
             current_row = [i + 1]
             for j, c2 in enumerate(s2):
@@ -3041,7 +2953,16 @@ class Node:
                 substitutions = previous_row[j] + (c1 != c2)
                 current_row.append(min(insertions, deletions, substitutions))
             previous_row = current_row
-        return previous_row[-1]
+
+        base_dist = previous_row[-1]
+
+        # Extra penalty to account for missing characters (length difference)
+        # This increases dissimilarity when one string is missing characters compared to the other.
+        # Use a mild scaling: half the absolute length difference (rounded up).
+        length_diff = abs(len1 - len2)
+        extra_penalty = (length_diff + 1) // 2
+
+        return base_dist + extra_penalty
 
     def check_tables(self, name):
         # 1. CS: Exact match or Levenshtein <= 3
