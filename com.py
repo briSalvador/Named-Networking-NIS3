@@ -284,6 +284,39 @@ class DebugController:
         else:
             print(f"[DEBUG] Node {node_name} not found.")
 
+    def send_interest(self, origin_name, interest_name, seq_num=0):
+        origin = self.nodes.get(origin_name)
+        if not origin:
+            print(f"[DEBUG] Origin node {origin_name} not found.")
+            return
+
+        try:
+            send_interest_via_ns(
+                origin_node=origin,
+                seq_num=seq_num,
+                name=interest_name,
+                data_flag=False
+            )
+            print(f"[DEBUG] Sent INTEREST from {origin_name} for {interest_name} (seq={seq_num})")
+        except Exception as e:
+            print(f"[DEBUG] Failed to send INTEREST: {e}")
+
+    def add_cs(self, node_name, content_name, data_value):
+        node = self.nodes.get(node_name)
+        if not node:
+            print(f"[DEBUG] Node {node_name} not found.")
+            return
+
+        try:
+            if hasattr(node, "add_cs") and callable(getattr(node, "add_cs")):
+                node.add_cs(content_name, data_value)
+            else:
+                if not hasattr(node, "cs"):
+                    node.cs = {}
+                node.cs[content_name] = data_value
+            print(f"[DEBUG] Added CS entry on {node_name}: {content_name} -> {data_value}")
+        except Exception as e:
+            print(f"[DEBUG] Failed to add CS entry: {e}")
 
     def run_test(self, test_id):
         print(f"[DEBUG] Running test case {test_id}...")
@@ -378,12 +411,14 @@ class DebugController:
     def help(self):
         print("""
 [DEBUG COMMANDS]
-  list                 - show all nodes
-  select <node_name>   - zoom into a node
-  run <test_id>        - execute a test (1-5)
-  filter <names...>    - logs for listed nodes
-  help                 - show this menu
-  exit                 - quit debugging
+  list                             - show all nodes
+  select <node_name>               - zoom into a node
+  run <test_id>                    - execute a test (1-5)
+  addcs <node> <name> <data>       - add a CS entry
+  interest <origin> <name> [seq]   - send Interest
+  filter <names...>                - logs for listed nodes
+  help                             - show this menu
+  exit                             - quit debugging
         """)
 
     def process_command(self, cmd):
@@ -403,6 +438,28 @@ class DebugController:
                     self.run_test(parts[1])
                 else:
                     print("[DEBUG] Usage: run <test_id>")
+            case "interest":
+                # interest <origin_node> <content_name> [seq]
+                if len(parts) >= 3:
+                    origin_name = parts[1]
+                    interest_name = parts[2]
+                    try:
+                        seq_num = int(parts[3]) if len(parts) > 3 else 0
+                    except ValueError:
+                        print("[DEBUG] seq_num must be an integer; defaulting to 0.")
+                        seq_num = 0
+                    self.send_interest(origin_name, interest_name, seq_num)
+                else:
+                    print("[DEBUG] interest <origin_node_name> <content_name> [seq_num]")
+            case "addcs":
+                # addcs <node_name> <content_name> <data>
+                if len(parts) >= 4:
+                    node_name = parts[1]
+                    content_name = parts[2]
+                    data_value = " ".join(parts[3:])
+                    self.add_cs(node_name, content_name, data_value)
+                else:
+                    print("[DEBUG] addcs <node_name> <content_name> <data>")
             case "help":
                 self.help()
             case "exit":
