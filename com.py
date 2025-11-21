@@ -48,18 +48,41 @@ if __name__ == "__main__":
             gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns, admu_ns, up_ns]
 
     # load all nodes
-    for node in nodes:
-        # NameServers and Nodes both implement load_neighbors_from_file
-        try:
-            node.load_neighbors_from_file("neighbors.txt")
-        except Exception:
-            pass
-        # NameServers and Nodes both implement load_neighbors_from_file
-        try:
-            node.load_neighbors_from_file("neighbors.txt")
-        except Exception:
-            pass
-    time.sleep(2)
+    # for node in nodes:
+    #     # NameServers and Nodes both implement load_neighbors_from_file
+    #     try:
+    #         node.load_neighbors_from_file("neighbors.txt")
+    #     except Exception:
+    #         pass
+    # time.sleep(2)
+
+    # Start periodic HELLO / neighbor-file reload every 30 seconds.
+    # This ensures NameServers and Nodes re-announce and re-learn neighbor ports.
+    def _periodic_hello_loop(all_nodes, interval=30):
+        while True:
+            for n in all_nodes:
+                try:
+                    # Both Node and NameServer implement load_neighbors_from_file
+                    n.load_neighbors_from_file("neighbors.txt")
+                except Exception:
+                    # ignore per-node failures (keep loop running)
+                    pass
+                # If a Node exposes a neighbor-discovery loop, start it once (daemon)
+                try:
+                    if hasattr(n, "start_neighbor_discovery") and callable(getattr(n, "start_neighbor_discovery")):
+                        # start_neighbor_discovery returns a thread; avoid starting multiple times
+                        if not getattr(n, "_neighbor_discovery_started", False):
+                            try:
+                                n.start_neighbor_discovery(interval=interval)
+                            except Exception:
+                                pass
+                            n._neighbor_discovery_started = True
+                except Exception:
+                    pass
+            time.sleep(interval)
+
+    hello_thread = threading.Thread(target=_periodic_hello_loop, args=(nodes, 30), daemon=True)
+    hello_thread.start()
 
     # neighbor tables
     print("\n--- Neighbor Tables ---")
