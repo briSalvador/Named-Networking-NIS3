@@ -1341,22 +1341,6 @@ class Node:
                     enc_border = None
                     enc_name = None
 
-            # --- EARLY ENCAP REGISTRATION -------------------------------------------------
-            # Ensure ENCAP interests are recorded in ns_query_table BEFORE any FIB/CS/PIT checks
-            # so that subsequent ROUTE_ACK or ROUTING_DATA packets can be forwarded upstream.
-            try:
-                if raw_interest_name.startswith("ENCAP:") and " " not in self.name:
-                    key = raw_interest_name  # preserve full ENCAP wrapper
-                    entry_list = self.ns_query_table.setdefault(key, [])
-                    # Avoid duplicate port entries
-                    if not any((isinstance(e, dict) and e.get("port") == addr[1]) or e == addr[1] for e in entry_list):
-                        entry_list.append({"port": addr[1], "ack_only": True})
-                        print(f"[{self.name}] Node Registered ENCAP interest '{key}' (ack-only) from iface {addr[1]}")
-                        self.log(f"[{self.name}] Node Registered ENCAP interest '{key}' (ack-only) from iface {addr[1]}")
-            except Exception as e:
-                self.log(f"[{self.name}] Failed early ENCAP registration: {e}")
-            # ------------------------------------------------------------------------------
-
             # If ENCAP exists, override dest_name
             if enc_name:
                 dest_name = enc_name
@@ -1656,16 +1640,16 @@ class Node:
                     
                             try:
                                 # CHANGED: Use enc_name (original destination) as key instead of parsed["Name"] (ENCAP string)
-                                key = enc_name if enc_name else parsed.get("Name")
+                                key = parsed.get("Name")
                                 if key:
                                     self.ns_query_table.setdefault(key, [])
                                     exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
                                     if not exists:
-                                        if not self._is_ns_port(addr[1]):
-                                            self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
-                                            self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
-                                        else:
-                                            self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
+                                        self.ns_query_table[key].append({"port": addr[1], "ack_only": True})
+                                        self.log(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                        print(f"[{self.name}] Registered ack-only NS query for {key} from iface {addr[1]}")
+                                    else:
+                                        self.log(f"[{self.name}] Ignored registering ns_query_table entry from NS port {addr[1]}")
                             except Exception:
                                 pass
                             
