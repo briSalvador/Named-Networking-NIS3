@@ -882,7 +882,6 @@ class Node:
                 data, addr = self.sock.recvfrom(4096)
                 # Log arrival first (so arrival line appears before any processing output),
                 # then hand off to the processing pipeline.
-                print(f"[{self.name}] Received packet from {addr}")
                 
                 item = {"packet": data, "addr": addr}
                 try:
@@ -2168,7 +2167,7 @@ class Node:
                 if frag_key not in self.fragment_buffer:
                     self.fragment_buffer[frag_key] = [None] * parsed["TotalFragments"]
                 self.fragment_buffer[frag_key][parsed["FragmentNum"]-1] = parsed["Payload"]
-                self.log(f"Received DATA fragment {parsed['FragmentNum']}/{parsed['TotalFragments']} from {addr}")
+                self.log(f"[{self.name}] Received DATA fragment {parsed['FragmentNum']}/{parsed['TotalFragments']} from {addr}")
                 if all(frag is not None for frag in self.fragment_buffer[frag_key]):
                     full_payload = ''.join(self.fragment_buffer[frag_key])
                     self.log(f"All fragments received. Reassembled payload: {full_payload}")
@@ -2207,7 +2206,7 @@ class Node:
                 self.log(f"Parsed: {parsed}")
                 self.log(f"Object: {pkt_obj}")
                 
-                print(f"Received DATA from {addr} at {timestamp}")
+                print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
                 print(f"Parsed: {parsed}")
                 print(f"Object: {pkt_obj}")
                 self.add_cs(name, parsed["Payload"])
