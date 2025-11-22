@@ -1508,7 +1508,6 @@ class Node:
                                                 self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
                                                 self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
                                                 print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
-                                                print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
                                     except Exception as e:
                                         self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
 
@@ -1577,7 +1576,6 @@ class Node:
                                         self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
                                         self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
                                         print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
-                                        print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
                             except Exception as e:
                                 self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
                             
@@ -1616,7 +1614,6 @@ class Node:
                                             self.ns_query_table[full_key].append({"port": addr[1], "ack_only": True})
                                             self.log(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
                                             print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
-                                            print(f"[{self.name}] ns_query_table: {self.ns_query_table}")
                                 except Exception as e:
                                     self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
                                 self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
@@ -2050,8 +2047,8 @@ class Node:
                                         data_flag=False
                                     )
                                     self.sock.sendto(pkt, ("127.0.0.1", int(alt_ns_port)))
-                                    print(f"[{self.name}] BORDER NS QUERY (fallback) → {alt_ns} for {parsed['Name']}")
-                                    self.log(f"[{self.name}] BORDER NS QUERY (fallback) → {alt_ns} for {parsed['Name']}")
+                                    print(f"[{self.name}] BORDER NS QUERY → {alt_ns} for {parsed['Name']}")
+                                    self.log(f"[{self.name}] BORDER NS QUERY → {alt_ns} for {parsed['Name']}")
                                     # mark buffered
                                     with self.buffer_lock:
                                         for entry in self.buffer:
@@ -2274,8 +2271,6 @@ class Node:
             # Forward the ack toward all recorded NS-query interfaces (propagate ack upstream)
             # Try exact lookup first, then tolerant matches (handles stripped vs full-encap keys).
             pending = self.ns_query_table.get(dest_name)
-            print(f"[{self.name}] Current Pending Interests for ROUTE_ACK {dest_name}: {self.ns_query_table}")
-            print(f"[{self.name}] Matched pending interfaces for ROUTE_ACK {dest_name}: {pending}")
             
             matched_key = dest_name
             # if not pending:
@@ -2463,13 +2458,7 @@ class Node:
 
             # Alias-aware port resolution
             def _resolve_port_by_name(self, name_str):
-                """
-                Resolve a node-name (may be space-separated aliases) to a known port.
-                Tries, in order:
-                - exact match in self.name_to_port
-                - any alias token in name_str found in name_to_port
-                - neighbor_table keys (exact or alias tokens)
-                - strip last level (parent) and try again
+                """Resolve a node/name (may be space-separated aliases) to a known port.
                 Returns (port:int or None, resolved_name:str or None)
                 """
                 if not name_str:
@@ -2548,7 +2537,7 @@ class Node:
                             forwarded_local = []
                             for entry in list(snapshot):
                                 print(f"[{self.name}] Dest: {dest} | Buffered Entry Dest: {entry.get('destination')} | Status: {entry.get('status')}")
-                                if entry.get("destination") == dest and entry.get("status") != "resolved":
+                        if entry.get("destination") == dest and entry.get("status") != "resolved":
                                     try:
                                         # parse original buffered packet to preserve origin and seq
                                         parsed_pkt = parse_interest_packet(entry["packet"])
@@ -2573,6 +2562,39 @@ class Node:
                     print(f"[{self.name}] Route reply missing dest/next_hop info: route_info={route_info}")
                     self.log(f"[{self.name}] Route reply missing dest/next_hop info: route_info={route_info}")
 
+                # NEW: If we actually resolved buffered real-interests, forward them immediately
+                # to the installed next-hop(s) and avoid sending ROUTE_ACKs (which propagate upstream).
+                if forwarded_local:
+                    try:
+                        for entry in forwarded_local:
+                            try:
+                                target_port = int(entry.get("next_hop"))
+                                pkt = entry.get("packet")
+                                if pkt:
+                                    # send the REAL_INTEREST directly to next-hop toward destination
+                                    self.log(f"[{self.name}] Immediately forwarded resolved REAL_INTEREST for {dest} to port {target_port}")
+                                    print(f"[{self.name}] Immediately forwarded resolved REAL_INTEREST for {dest} to port {target_port}")
+                                    self.sock.sendto(pkt, ("127.0.0.1", target_port))
+                                # remove from buffer now that we forwarded
+                                with self.buffer_lock:
+                                    try:
+                                        self.buffer.remove(entry)
+                                    except ValueError:
+                                        pass
+                            except Exception as e:
+                                self.log(f"[{self.name}] Error forwarding resolved buffered interest to port {entry.get('next_hop')}: {e}")
+                        # Clear any ns_query_table entries for this dest to prevent ACK propagation
+                        if dest_name in self.ns_query_table:
+                            del self.ns_query_table[dest_name]
+                    except Exception as e:
+                        self.log(f"[{self.name}] Failed to immediately forward resolved buffered interests: {e}")
+                    # Because real interests were forwarded, do NOT send ROUTE_ACKs here — return early.
+                    return pkt_obj
+
+                # NEW: After processing the route, send ROUTE_ACK to any ack_only origins for this destination
+                # (e.g., the router that sent the ENCAP packet expecting an ACK upon route resolution)
+                pending_acks = self.ns_query_table.get(dest_name, [])
+
                 # NEW: After processing the route, send ROUTE_ACK to any ack_only origins for this destination
                 # (e.g., the router that sent the ENCAP packet expecting an ACK upon route resolution)
                 pending_acks = self.ns_query_table.get(dest_name, [])
@@ -2580,12 +2602,16 @@ class Node:
                 if ack_only_ports:
                     for port in list(set(ack_only_ports)):  # Deduplicate ports
                         try:
-                            #ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
-                            self.sock.sendto(packet, ("127.0.0.1", int(port)))
-                            self.log(f"[{self.name}] Sent ROUTE_ACK for {dest_name} to ENCAP origin port {port} (ack_only)")
+                            # build an explicit lightweight ROUTE_ACK (do NOT send the full ROUTE_DATA)
+                            ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
+                            # DEBUG: show intended send for ack_only (pre-send)
+                            self.log(f"[{self.name}] Sending ROUTE_ACK (ack_only) for {dest_name} -> port {port}")
+                            print(f"[{self.name}] Sending ROUTE_ACK (ack_only) for {dest_name} -> port {port}")
+                            self.sock.sendto(ack_pkt, ("127.0.0.1", int(port)))
+                            self.log(f"[{self.name}] Sent ROUTE_ACK (ack_only) for {dest_name} to ENCAP origin port {port}")
                         except Exception as e:
                             self.log(f"[{self.name}] Error sending ROUTE_ACK to ENCAP origin port {port}: {e}")
-                    # Clear the ack_only entries after sending
+                   # Clear the ack_only entries after sending
                     self.ns_query_table[dest_name] = [entry for entry in pending_acks if not entry.get("ack_only")]
                     if not self.ns_query_table[dest_name]:
                         del self.ns_query_table[dest_name]
@@ -2698,35 +2724,37 @@ class Node:
                 dest_name = parsed.get("Name")
                 pending = self.ns_query_table.get(dest_name, [])
                 if pending:
-                    # pending is list of dicts { "port": <int>, "ack_only": <bool> }
                     for entry in list(pending):
                         try:
                             p = int(entry.get("port"))
+                            # DEBUG: show what kind of pending entry we're forwarding to
+                            self.log(f"[{self.name}] ROUTE_REPLY forward -> port={p} ack_only={entry.get('ack_only')} dest={dest_name} src={addr}")
+                            print(f"[{self.name}] ROUTE_REPLY forward -> port={p} ack_only={entry.get('ack_only')} dest={dest_name} src={addr}")
                             if entry.get("ack_only"):
-                                # The interface who asked us used ack-only registration (e.g. ENCAP origin).
-                                # They still need the full ROUTE_DATA so they can continue resolution. Send full packet;
-                                # if that fails, fall back to sending a lightweight ROUTE_ACK.
+                                # Previously we sent the full ROUTE_DATA back to ack_only ports.
+                                # That can send the route reply into the wrong adjacent domain/interface.
+                                # Instead send a lightweight ROUTE_ACK so ack-only requesters get the ACK
+                                # and do not accidentally receive a full ROUTE_DATA meant elsewhere.
                                 try:
-                                    self.sock.sendto(packet, ("127.0.0.1", p))
-                                    self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p} (ack_only -> sent full ROUTE_DATA)")
+                                    ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
+                                    self.sock.sendto(ack_pkt, ("127.0.0.1", p))
+                                    self.log(f"[{self.name}] Sent ROUTE_ACK (ack_only) for {dest_name} to port {p}")
+                                    print(f"[{self.name}] Sent ROUTE_ACK (ack_only) for {dest_name} to port {p}")
                                 except Exception as e:
-                                    # fallback: send lightweight ack only
-                                    try:
-                                        ack_pkt = create_route_ack_packet(parsed.get("SequenceNumber", 0), dest_name)
-                                        self.sock.sendto(ack_pkt, ("127.0.0.1", p))
-                                        self.log(f"[{self.name}] Sent ROUTE_ACK for {dest_name} to NS-query iface port {p} (ack_only, fallback due to send error: {e})")
-                                    except Exception as e2:
-                                        self.log(f"[{self.name}] Failed to send ROUTE_DATA or ROUTE_ACK to port {p}: {e2}")
+                                    self.log(f"[{self.name}] Failed sending ROUTE_ACK to port {p}: {e}")
+                                    print(f"[{self.name}] Failed sending ROUTE_ACK to port {p}: {e}")
                             else:
-                                # original behaviour: forward full ROUTE_DATA
+                                # full reply to requester
                                 try:
-                                    self.log(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
-                                    print(f"[{self.name}] Forwarded ROUTE DATA for {dest_name} to NS-query iface port {p}")
+                                    self.log(f"[{self.name}] Forwarded full ROUTE_DATA for {dest_name} to NS-query iface port {p}")
+                                    print(f"[{self.name}] Forwarded full ROUTE_DATA for {dest_name} to NS-query iface port {p}")
                                     self.sock.sendto(packet, ("127.0.0.1", p))
                                 except Exception as e:
-                                    self.log(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {entry}: {e}")
+                                    self.log(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {p}: {e}")
+                                    print(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {p}: {e}")
                         except Exception as e:
                             self.log(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {entry}: {e}")
+                            print(f"[{self.name}] Error forwarding ROUTE response to NS-query iface {entry}: {e}")
                     # clear recorded pending query interfaces for this destination
                     try:
                         del self.ns_query_table[dest_name]
@@ -2755,19 +2783,19 @@ class Node:
                             prev_hop_name = normalized[idx - 1]
                             # try to resolve prev_hop_name to a port
                             prev_port = None
-                            prev_port = self.name_to_port.get(prev_hop_name)
-                            if prev_port is None:
-                                fib_entry = self.fib.get(prev_hop_name)
-                                if fib_entry:
-                                    prev_port = fib_entry.get("NextHops")
+                            # use robust resolver
+                            prev_port, resolved = self._resolve_port_by_name(prev_hop_name)
+                            self.log(f"[{self.name}] PATH-FWD candidate prev_hop_name={prev_hop_name} resolved_port={prev_port} resolved_name={resolved}")
+                            print(f"[{self.name}] PATH-FWD candidate prev_hop_name={prev_hop_name} resolved_port={prev_port} resolved_name={resolved}")
                             if prev_port is not None:
                                 try:
                                     self.sock.sendto(packet, ("127.0.0.1", int(prev_port)))
                                     self.log(f"[{self.name}] Forwarded ROUTE DATA for {parsed.get('Name')} to previous hop {prev_hop_name} (port {prev_port})")
+                                    print(f"[{self.name}] Forwarded ROUTE DATA for {parsed.get('Name')} to previous hop {prev_hop_name} (port {prev_port})")
                                     forwarded = True
                                 except Exception as e:
                                     self.log(f"[{self.name}] Error forwarding ROUTE DATA to previous hop {prev_hop_name} at port {prev_port}: {e}")
-                    # if this node is not in path or couldn't forward via path, fallthrough to other methods
+                                    print(f"[{self.name}] Error forwarding ROUTE DATA to previous hop {prev_hop_name} at port {prev_port}: {e}")
 
                 if not forwarded:
                     # Try to forward directly to origin if we know its port
@@ -2790,11 +2818,13 @@ class Node:
 
                         if origin_port:
                             try:
+                                self.log(f"[{self.name}] DIRECT-FWD ROUTE DATA -> origin {origin_name} at port {origin_port}")
+                                print(f"[{self.name}] DIRECT-FWD ROUTE DATA -> origin {origin_name} at port {origin_port}")
                                 self.sock.sendto(packet, ("127.0.0.1", int(origin_port)))
-                                self.log(f"[{self.name}] Forwarded ROUTE DATA directly to origin {origin_name} at port {origin_port}")
                                 return pkt_obj
                             except Exception as e:
                                 self.log(f"[{self.name}] Failed direct forward to origin {origin_name}: {e}")
+                                print(f"[{self.name}] Failed direct forward to origin {origin_name}: {e}")
 
                     # Fallback: forward to any PIT interfaces (existing behaviour)
                     self.log(f"[{self.name}] Falling back to PIT forwarding for ROUTE DATA.")
