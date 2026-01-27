@@ -22,6 +22,14 @@ def _thread_safe_print(*args, **kwargs):
         _original_print(*args, **kwargs)
         message = ' '.join(str(arg) for arg in args)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        # If the message contains multiple attributes formatted as key=value pairs
+        # separated by commas, insert line breaks for readability.
+        try:
+            if "=" in message and ", " in message:
+                message = message.replace(", ", ",\n    ")
+        except Exception:
+            pass
+
         _global_log_buffer.append((timestamp, message))
         
 # Replace built-in print for this process so all prints are serialized
@@ -276,6 +284,13 @@ def parse_data_packet(packet):
     packet_type = (packet_type_flags >> 4) & 0xF
     flags = packet_type_flags & 0xF
 
+    # Return both raw bytes and a best-effort decoded string for compatibility
+    decoded = None
+    try:
+        decoded = payload.decode("utf-8", errors="ignore")
+    except Exception:
+        decoded = ""
+
     return {
         "PacketType": packet_type,
         "Flags": flags,
@@ -283,7 +298,8 @@ def parse_data_packet(packet):
         "PayloadSize": payload_size,
         "NameLength": name_length,
         "Name": name,
-        "Payload": payload.decode("utf-8", errors="ignore"),
+        "Payload": decoded,
+        "PayloadBytes": payload,
         "FragmentNum": fragment_num,
         "TotalFragments": total_fragments,
     }
@@ -1189,18 +1205,23 @@ class Node:
     def send_data(self, seq_num, name, payload, flags=0x0, target=("127.0.0.1", 0)):
         payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
         max_payload_per_packet = FRAGMENT_SIZE - (6 + len(name.encode("utf-8")))  # header + name
-        total_fragments = (len(payload_bytes) + max_payload_per_packet - 1) // max_payload_per_packet
+        # cap to 1-byte payload field
+        chunk_size = min(max_payload_per_packet, 255)
 
-        if len(payload_bytes) > max_payload_per_packet:
+        total_fragments = (len(payload_bytes) + chunk_size - 1) // chunk_size
+
+        if len(payload_bytes) > chunk_size:
             # Fragmentation needed
             for i in range(total_fragments):
-                frag_payload = payload_bytes[i*max_payload_per_packet:(i+1)*max_payload_per_packet]
-                pkt = create_data_packet(seq_num, name, frag_payload, flags | TRUNC_FLAG, i+1, total_fragments)
+                frag_payload = payload_bytes[i*chunk_size:(i+1)*chunk_size]
+                # set TRUNC_FLAG only on the last fragment
+                frag_flags = (flags | TRUNC_FLAG) if (i == total_fragments - 1) else flags
+                pkt = create_data_packet(seq_num, name, frag_payload, frag_flags, i+1, total_fragments)
                 self.sock.sendto(pkt, target)
                 print(f"[{self.name}] Sent DATA fragment {i+1}/{total_fragments} to {target}")
                 self.log(f"[{self.name}] Sent DATA fragment {i+1}/{total_fragments} to {target}")
         else:
-            pkt = create_data_packet(seq_num, name, payload, flags, 1, 1)
+            pkt = create_data_packet(seq_num, name, payload_bytes, flags, 1, 1)
             self.sock.sendto(pkt, target)
             print(f"[{self.name}] Sent DATA packet to {target}")
             self.log(f"[{self.name}] Sent DATA packet to {target}")
@@ -2221,27 +2242,65 @@ class Node:
             frag_key = (parsed["SequenceNumber"], parsed["Name"])
             name = parsed["Name"]
 
-            # Fragmentation handling for large DATA
+            # Fragmentation handling for large DATA: buffer raw bytes until all fragments arrive
             if parsed["TotalFragments"] > 1:
                 if frag_key not in self.fragment_buffer:
                     self.fragment_buffer[frag_key] = [None] * parsed["TotalFragments"]
-                self.fragment_buffer[frag_key][parsed["FragmentNum"]-1] = parsed["Payload"]
+                # store raw bytes
+                self.fragment_buffer[frag_key][parsed["FragmentNum"]-1] = parsed.get("PayloadBytes", b"")
                 self.log(f"[{self.name}] Received DATA fragment {parsed['FragmentNum']}/{parsed['TotalFragments']} from {addr}")
+                print(f"[{self.name}] Received DATA fragment {parsed['FragmentNum']}/{parsed['TotalFragments']} from {addr}")
+                # only reassemble when all slots are filled
                 if all(frag is not None for frag in self.fragment_buffer[frag_key]):
-                    full_payload = ''.join(self.fragment_buffer[frag_key])
-                    self.log(f"All fragments received. Reassembled payload: {full_payload}")
+                    full_payload_bytes = b''.join(self.fragment_buffer[frag_key])
+                    # Announce receipt of full reassembled DATA (for parity with non-fragmented path)
                     try:
-                        payload_bytes = full_payload.encode('utf-8') if isinstance(full_payload, str) else full_payload
-                        self._record_data_stat(name, parsed["SequenceNumber"], payload_bytes, timestamp)
+                        print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
+                        self.log(f"[{self.name}] Received DATA from {addr} at {timestamp}")
+                    except Exception:
+                        pass
+                    # Build a parsed-like view and a DataPacket object for the reassembled content
+                    try:
+                        re_parsed = dict(parsed)
+                        re_parsed["PayloadBytes"] = full_payload_bytes
+                        try:
+                            re_parsed["Payload"] = full_payload_bytes.decode("utf-8", errors="ignore")
+                        except Exception:
+                            re_parsed["Payload"] = ""
+                        re_parsed["FragmentNum"] = 1
+                        re_parsed["TotalFragments"] = 1
+                        re_parsed["PayloadSize"] = len(full_payload_bytes)
+
+                        # Pass raw bytes to DataPacket so PayloadSize and payload content match
+                        re_pkt_obj = DataPacket(
+                            seq_num=re_parsed.get("SequenceNumber"),
+                            name=re_parsed.get("Name"),
+                            payload=full_payload_bytes,
+                            flags=re_parsed.get("Flags"),
+                            timestamp=timestamp
+                        )
+
+                        print("Parsed:")
+                        print(re_parsed)
+                        print("Object:")
+                        print(re_pkt_obj)
+                    except Exception:
+                        pass
+                    try:
+                        self._record_data_stat(name, parsed["SequenceNumber"], full_payload_bytes, timestamp)
                         self.log(f"[STATS] Recorded DATA (reassembled) name={name} seq={parsed['SequenceNumber']}")
                     except Exception:
                         pass
-                    self.add_cs(name, full_payload)
-                    # forward to PIT interfaces
+                    # store raw bytes in CS
+                    try:
+                        self.add_cs(name, full_payload_bytes)
+                    except Exception:
+                        self.log(f"[{self.name}] Failed to add reassembled content to CS for {name}")
+
+                    # forward reassembled DATA to PIT interfaces
                     if name in self.pit:
                         interfaces = list(self.pit[name])
                         for interface in interfaces:
-                            # Skip forwarding back to the interface that sent this DATA (avoid loop/duplicate)
                             try:
                                 incoming_port = addr[1] if addr else None
                             except Exception:
@@ -2259,12 +2318,20 @@ class Node:
                                 self.remove_pit(name, interface)
                                 self.log(f"[{self.name}] Delivered reassembled DATA locally (would have sent to self.port {self.port}); suppressing UDP send")
                                 continue
-                        
+
+                            # normal forward: remove PIT entry then re-fragment & send DATA
                             self.remove_pit(name, interface)
-                            pkt = create_data_packet(parsed["SequenceNumber"], name, full_payload, parsed["Flags"], 1, 1)
-                            self.sock.sendto(pkt, (self.host, interface))
-                            self.log(f"Forwarded reassembled DATA to PIT interface {interface}")
-                    del self.fragment_buffer[frag_key]
+                            try:
+                                # re-use send_data which handles fragmentation and TRUNC_FLAG semantics
+                                self.send_data(parsed["SequenceNumber"], name, full_payload_bytes, parsed["Flags"], target=(self.host, int(interface)))
+                                self.log(f"Forwarded reassembled DATA to PIT interface {interface}")
+                            except Exception as e:
+                                self.log(f"[{self.name}] Failed forwarding reassembled DATA to {interface}: {e}")
+                    # cleanup buffer
+                    try:
+                        del self.fragment_buffer[frag_key]
+                    except Exception:
+                        pass
             else:
                 # Regular DATA from destination: add to CS and forward using PIT
                 self.log(f"Received DATA from {addr} at {timestamp}")
@@ -2276,12 +2343,12 @@ class Node:
                 print(f"Object: {pkt_obj}")
                 try:
                     payload = parsed.get("Payload")
-                    payload_bytes = payload.encode('utf-8') if isinstance(payload, str) else payload
+                    payload_bytes = parsed.get("PayloadBytes") if parsed.get("PayloadBytes") is not None else (payload.encode('utf-8') if isinstance(payload, str) else payload)
                     self._record_data_stat(name, parsed["SequenceNumber"], payload_bytes, timestamp)
                     self.log(f"[STATS] Recorded DATA name={name} seq={parsed['SequenceNumber']}")
                 except Exception:
                     pass
-                self.add_cs(name, parsed["Payload"])
+                self.add_cs(name, payload_bytes)
                 if name in self.pit:
                     interfaces = list(self.pit[name])
                     for interface in interfaces:
@@ -2305,7 +2372,7 @@ class Node:
                             continue
 
                         self.remove_pit(name, interface)
-                        pkt = create_data_packet(parsed["SequenceNumber"], name, parsed["Payload"], parsed["Flags"], 1, 1)
+                        pkt = create_data_packet(parsed["SequenceNumber"], name, payload_bytes, parsed["Flags"], 1, 1)
                         self.sock.sendto(pkt, (self.host, interface))
                         self.log(f"Forwarded DATA to PIT interface {interface}")
 

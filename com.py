@@ -309,10 +309,16 @@ if __name__ == "__main__":
 
     # START HERE FOR DEMO
 
-    # Test Case if interest is localized in the DLSU domain
-    interest_name = "/DLSU/Miguel/cam1/hello.txt"
-    dcam1.add_cs(interest_name, "Hello from cam1")
+    # Test Case if filesize exceeds packet max
+    interest_name = "/DLSU/Miguel/cam1/hello.bin"
+    synthetic_data = bytes(range(256)) * 10  # 2.5 KB of repeating data
+    dcam1.add_cs(interest_name, synthetic_data)
     send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # Test Case if interest is localized in the DLSU domain
+    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
+    # dcam1.add_cs(interest_name, "Hello from cam1!")
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test Case to check the presence of a file in the CS (intradomain) (bri)
     # interest_name = "/DLSU/Miguel/cam1/hello.txt"

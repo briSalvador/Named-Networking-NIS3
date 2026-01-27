@@ -17,7 +17,15 @@ class DataPacket(Packet):
         self.payload_size = len(payload.encode("utf-8")) if isinstance(payload, str) else len(payload)
 
     def __repr__(self):
-        return (f"<DataPacket PacketType={self.packet_type} Flags={self.flags} "
-                f"SequenceNumber={self.seq_num} PayloadSize={self.payload_size} "
-                f"NameLength={self.name_length} Name={self.name} "
-                f"Payload={self.payload} Timestamp={self.timestamp}>")
+        return (
+            f"<DataPacket\n"
+            f"  PacketType={self.packet_type}\n"
+            f"  Flags={self.flags}\n"
+            f"  SequenceNumber={self.seq_num}\n"
+            f"  PayloadSize={self.payload_size}\n"
+            f"  NameLength={self.name_length}\n"
+            f"  Name={self.name}\n"
+            f"  Payload={self.payload}\n"
+            f"  Timestamp={self.timestamp}\n"
+            f">"
+        )
