@@ -3,6 +3,7 @@ from nameserver import NameServer
 import time
 import threading
 import queue
+from datetime import datetime
 
 # Packet Types (4 bits)
 INTEREST = 0x1
@@ -11,15 +12,139 @@ ROUTING_DATA = 0x3
 HELLO = 0x4
 UPDATE = 0x5
 ERROR = 0x6
+ROUTE_ACK = 0x7
 
 # Flag Masks (lower 4 bits)
 ACK_FLAG = 0x1
 RET_FLAG = 0x2
 TRUNC_FLAG = 0x3
 
-# TODO: Fix NS Hello Packet handling and data route updates to nodes
-# Implement handling of interest for routing
-# When data is sent back by a node, the node will add it into its CS and FIB (not sure if this was done yet)
+# Statistics tracking class
+class NetworkStatistics:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.packet_counts = {
+            'INTEREST': 0,
+            'INTEREST_QUERY': 0,
+            'DATA': 0,
+            'ROUTING_DATA': 0,
+            'HELLO': 0,
+            'UPDATE': 0,
+            'ERROR': 0,
+            'ROUTE_ACK': 0
+        }
+        self.total_data_bits_transferred = 0
+        self.interest_data_pairs = {}  # {(origin, name, seq): {'interest_time': ts, 'data_time': ts}}
+        self.start_time = datetime.now()
+        self.end_time = None
+    
+    def record_interest(self, origin_node, name, seq_num, timestamp):
+        """Record when an interest packet is sent"""
+        with self.lock:
+            key = (origin_node, name, seq_num)
+            if key not in self.interest_data_pairs:
+                self.interest_data_pairs[key] = {}
+            self.interest_data_pairs[key]['interest_time'] = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
+            self.packet_counts['INTEREST'] += 1
+    
+    def record_interest_query(self):
+        """Record when an interest query (data_flag=False) is sent to NameServer"""
+        with self.lock:
+            self.packet_counts['INTEREST_QUERY'] += 1
+    
+    def record_data(self, name, seq_num, payload_size, timestamp):
+        """Record when a data packet is received and match it with interest"""
+        with self.lock:
+            # First, count the DATA packet
+            self.packet_counts['DATA'] += 1
+            self.total_data_bits_transferred += payload_size * 8  # Convert bytes to bits
+            
+            # Try to find and update matching interest records
+            # Data packets may come from any origin, so we search for matching name and seq
+            timestamp_dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
+            
+            for key, times in self.interest_data_pairs.items():
+                origin_node, interest_name, interest_seq = key
+                # Match by name and sequence number (origin may differ for intermediate nodes)
+                if interest_name == name and interest_seq == seq_num:
+                    if 'interest_time' in times:
+                        times['data_time'] = timestamp_dt
+
+    
+    def record_packet(self, packet_type, size_bits=0):
+        """Record any packet type (but skip DATA/INTEREST as they're counted separately)"""
+        with self.lock:
+            packet_names = {
+                INTEREST: 'INTEREST',
+                DATA: 'DATA',
+                ROUTING_DATA: 'ROUTING_DATA',
+                HELLO: 'HELLO',
+                UPDATE: 'UPDATE',
+                ERROR: 'ERROR',
+                ROUTE_ACK: 'ROUTE_ACK'
+            }
+            if packet_type in packet_names:
+                packet_name = packet_names[packet_type]
+                # Skip double-counting DATA and INTEREST (recorded separately)
+                if packet_name not in ['DATA', 'INTEREST']:
+                    self.packet_counts[packet_name] += 1
+    
+    def finalize(self):
+        """Mark the end of statistics collection"""
+        self.end_time = datetime.now()
+    
+    def calculate_latencies(self):
+        """Calculate latency for each completed interest-data pair"""
+        latencies = []
+        with self.lock:
+            for key, times in self.interest_data_pairs.items():
+                if 'interest_time' in times and 'data_time' in times:
+                    latency = (times['data_time'] - times['interest_time']).total_seconds()
+                    latencies.append(latency)
+        return latencies
+    
+    def get_statistics(self):
+        """Get comprehensive network statistics"""
+        total_time = (self.end_time - self.start_time).total_seconds() if self.end_time else 0
+        latencies = self.calculate_latencies()
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+        max_latency = max(latencies) if latencies else 0
+        min_latency = min(latencies) if latencies else 0
+        
+        # Calculate throughput in bits per second
+        throughput_bps = self.total_data_bits_transferred / total_time if total_time > 0 else 0
+        throughput_kbps = throughput_bps / 1000
+        
+        # Count control packets (non-data)
+        control_packets = (self.packet_counts['HELLO'] + 
+                          self.packet_counts['UPDATE'] + 
+                          self.packet_counts['ROUTING_DATA'] +
+                          self.packet_counts['ERROR'] +
+                          self.packet_counts['ROUTE_ACK'])
+        
+        total_packets = sum(self.packet_counts.values())
+        control_overhead_percent = (control_packets / total_packets * 100) if total_packets > 0 else 0
+        
+        return {
+            'total_time': total_time,
+            'packet_counts': self.packet_counts,
+            'total_packets': total_packets,
+            'total_data_bits': self.total_data_bits_transferred,
+            'throughput_bps': throughput_bps,
+            'throughput_kbps': throughput_kbps,
+            'avg_latency_ms': avg_latency * 1000,
+            'max_latency_ms': max_latency * 1000,
+            'min_latency_ms': min_latency * 1000,
+            'control_packets': control_packets,
+            'control_overhead_percent': control_overhead_percent,
+            'completed_pairs': len(latencies)
+        }
+
+# Global statistics instance
+global_stats = NetworkStatistics()
+
+# Export for other modules
+__all__ = ['global_stats', 'NetworkStatistics', 'DebugController']
 
 if __name__ == "__main__":
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
@@ -189,7 +314,7 @@ if __name__ == "__main__":
     dcam1.add_cs(interest_name, "Hello from cam1")
     send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
-    # Test Case to check the presence of a file in the CS (intradomain)
+    # Test Case to check the presence of a file in the CS (intradomain) (bri)
     # interest_name = "/DLSU/Miguel/cam1/hello.txt"
     # dcam1.add_cs(interest_name, "Hello from cam1")
     # send_interest_via_ns(andrew, seq_num=0, name=interest_name, data_flag=False)
@@ -597,6 +722,58 @@ def nameserver_debug_menu(ns):
 
 controller = DebugController(nodes)
 
+def print_network_statistics():
+    """Print comprehensive network statistics"""
+    global_stats.finalize()
+    stats = global_stats.get_statistics()
+    
+    # Debug: Show raw data collection
+    print("\n" + "="*80)
+    print("DEBUG: RAW STATISTICS DATA")
+    print("="*80)
+    print(f"Total interests recorded: {stats['packet_counts']['INTEREST']}")
+    print(f"Total data packets recorded: {stats['packet_counts']['DATA']}")
+    print(f"Total bits transferred: {stats['total_data_bits']}")
+    print(f"Interest-data pairs: {stats['completed_pairs']}")
+    print(f"Raw interest_data_pairs dict size: {len(global_stats.interest_data_pairs)}")
+    if len(global_stats.interest_data_pairs) > 0:
+        print("Sample interest-data pairs:")
+        for i, (key, times) in enumerate(list(global_stats.interest_data_pairs.items())[:5]):
+            print(f"  {key}: {times}")
+    
+    print("\n" + "="*80)
+    print("NETWORK PERFORMANCE STATISTICS")
+    print("="*80)
+    
+    print("\n[LATENCY METRICS]")
+    print(f"  Average Latency:        {stats['avg_latency_ms']:.3f} ms")
+    print(f"  Maximum Latency:        {stats['max_latency_ms']:.3f} ms")
+    print(f"  Minimum Latency:        {stats['min_latency_ms']:.3f} ms")
+    print(f"  Completed Interest-Data Pairs: {stats['completed_pairs']}")
+    
+    print("\n[THROUGHPUT METRICS]")
+    print(f"  Total Data Transmitted: {stats['total_data_bits']} bits ({stats['total_data_bits']/8:.1f} bytes)")
+    print(f"  Throughput:             {stats['throughput_bps']:.2f} bps ({stats['throughput_kbps']:.3f} kbps)")
+    print(f"  Test Duration:          {stats['total_time']:.3f} seconds")
+    
+    print("\n[PACKET TRANSMISSION OVERHEAD]")
+    print(f"  Total Packets Sent:     {stats['total_packets']} packets")
+    print(f"    - INTEREST packets:   {stats['packet_counts']['INTEREST']}")
+    print(f"    - INTEREST_QUERY packets: {stats['packet_counts']['INTEREST_QUERY']}")
+    print(f"    - DATA packets:       {stats['packet_counts']['DATA']}")
+    print(f"    - ROUTING_DATA:       {stats['packet_counts']['ROUTING_DATA']}")
+    print(f"    - HELLO packets:      {stats['packet_counts']['HELLO']}")
+    print(f"    - UPDATE packets:     {stats['packet_counts']['UPDATE']}")
+    print(f"    - ERROR packets:      {stats['packet_counts']['ERROR']}")
+    print(f"    - ROUTE_ACK packets:  {stats['packet_counts']['ROUTE_ACK']}")
+    
+    print("\n[CONTROL OVERHEAD]")
+    print(f"  Control Packets:        {stats['control_packets']} packets")
+    print(f"  Control Overhead:       {stats['control_overhead_percent']:.2f}%")
+    print(f"  Data Packet Ratio:      {100 - stats['control_overhead_percent']:.2f}%")
+    
+    print("\n" + "="*80)
+
 """
 input_thread = threading.Thread(target=debug_input_loop, args=(controller,), daemon=True)
 input_thread.start()
@@ -611,4 +788,8 @@ except KeyboardInterrupt:
         node.stop()
 """
 from gui import LogGUI
+
+# Print statistics before starting GUI
+print_network_statistics()
+
 LogGUI(controller).run()

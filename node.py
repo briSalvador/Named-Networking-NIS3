@@ -692,6 +692,70 @@ class Node:
         self.buffer_thread = threading.Thread(target=self._process_buffer_loop, daemon=True)
         self.buffer_thread.start()
 
+    # --- Statistics helpers (lazy lookup to avoid circular imports) ---
+    def _get_global_stats(self):
+        try:
+            import sys
+            # Try common module names first
+            for mod_name in ('com', '__main__'):
+                mod = sys.modules.get(mod_name)
+                if mod and hasattr(mod, 'global_stats'):
+                    return getattr(mod, 'global_stats')
+            # Fallback: scan loaded modules for any with a global_stats attr
+            for m in list(sys.modules.values()):
+                try:
+                    if hasattr(m, 'global_stats'):
+                        return getattr(m, 'global_stats')
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _record_packet_stat(self, packet):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            packet_type = (packet[0] >> 4) & 0xF if packet else None
+            size_bits = len(packet) * 8 if packet else 0
+            gs.record_packet(packet_type, size_bits)
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record packet: {e}")
+
+    def _record_interest_stat(self, seq_num, name, timestamp=None):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            ts = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.log(f"[STATS] Recorded INTEREST seq={seq_num} name={name} origin={self.name} timestamp={ts}")
+            gs.record_interest(self.name, name, seq_num, ts)
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record interest: {e}")
+
+    def _record_interest_query_stat(self):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.log(f"[STATS] Recorded INTEREST QUERY timestamp={ts}")
+            gs.record_interest_query()
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record interest query: {e}")
+
+    def _record_data_stat(self, name, seq_num, payload_bytes, timestamp=None):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            size = len(payload_bytes) if payload_bytes is not None else 0
+            ts = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            gs.record_data(name, seq_num, size, ts)
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record data: {e}")
+
         """ self.broadcast_listener_thread = threading.Thread(target=self._listen_broadcast, daemon=True)
         self.broadcast_listener_thread.start()
 
@@ -1110,6 +1174,11 @@ class Node:
         # print(f"[{self.name}] Buffered originated interest for '{name}' -> {resolved_target}")
         #self.log(f"Sent NS QUERY seq={seq_num} '{name}' -> {resolved_target}")
         self.sock.sendto(query_pkt, ("127.0.0.1", self.port))
+        try:
+            # record originated interest
+            self._record_interest_stat(seq_num, name)
+        except Exception:
+            pass
         # print(f"[{self.name}] Sent NS QUERY (seq={seq_num}) for '{name}' to {resolved_target} (data_flag=False)")
         # except Exception as e:
         #     print(f"[{self.name}] ERROR sending NS QUERY to {resolved_target}: {e}")
@@ -1295,6 +1364,12 @@ class Node:
     def receive_packet(self, packet, addr=None):
         packet_type = (packet[0] >> 4) & 0xF
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+        # record any incoming packet (control packets counted here; DATA/INTEREST handled by their own recorders)
+        try:
+            self._record_packet_stat(packet)
+        except Exception:
+            pass
 
         # convenience: is this packet arriving from a known NameServer port?
         from_ns = False
@@ -1675,6 +1750,9 @@ class Node:
             kind = "REAL_INTEREST" if is_real_interest else "QUERY"
             print(f"[{self.name}] Received INTEREST ({kind}) from port {addr[1]} at {timestamp} origin={origin_node}")
             self.log(f"[{self.name}] Received INTEREST from port {addr[1]} at {timestamp}")
+
+            if kind == "QUERY":
+                self._record_interest_query_stat()
 
             table, data = self.check_tables(parsed["Name"])
 
@@ -2152,6 +2230,12 @@ class Node:
                 if all(frag is not None for frag in self.fragment_buffer[frag_key]):
                     full_payload = ''.join(self.fragment_buffer[frag_key])
                     self.log(f"All fragments received. Reassembled payload: {full_payload}")
+                    try:
+                        payload_bytes = full_payload.encode('utf-8') if isinstance(full_payload, str) else full_payload
+                        self._record_data_stat(name, parsed["SequenceNumber"], payload_bytes, timestamp)
+                        self.log(f"[STATS] Recorded DATA (reassembled) name={name} seq={parsed['SequenceNumber']}")
+                    except Exception:
+                        pass
                     self.add_cs(name, full_payload)
                     # forward to PIT interfaces
                     if name in self.pit:
@@ -2190,6 +2274,13 @@ class Node:
                 print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
                 print(f"Parsed: {parsed}")
                 print(f"Object: {pkt_obj}")
+                try:
+                    payload = parsed.get("Payload")
+                    payload_bytes = payload.encode('utf-8') if isinstance(payload, str) else payload
+                    self._record_data_stat(name, parsed["SequenceNumber"], payload_bytes, timestamp)
+                    self.log(f"[STATS] Recorded DATA name={name} seq={parsed['SequenceNumber']}")
+                except Exception:
+                    pass
                 self.add_cs(name, parsed["Payload"])
                 if name in self.pit:
                     interfaces = list(self.pit[name])
@@ -2225,16 +2316,18 @@ class Node:
             neighbor_name = parsed["Name"]
             self.neighbor_table[neighbor_name] = timestamp
             self.name_to_port[neighbor_name] = addr[1]
-            print(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
-            self.log(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
 
             if parsed["Flags"] == 0x0:
+                print(f"[{self.name}] Received NS HELLO from {neighbor_name} at {addr}")
+                self.log(f"[{self.name}] Received NS HELLO from {neighbor_name} at {addr}")
                 sender_domains = get_domains_from_name(neighbor_name)
                 ns_update_packet = create_ns_update_packet(neighbor_name, self.name, addr[1], 1)
                 self.send_ns_update_to_domain_neighbors(neighbor_name, sender_domains, 
                                                         ns_update_packet, exclude_port=addr[1])
                 self.handle_hello_from_neighbor(neighbor_name, addr, packet, timestamp)
             elif parsed["Flags"] == 0x1:
+                print(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
+                self.log(f"[{self.name}] Received HELLO from {neighbor_name} at {addr}")
                 self.handle_hello_from_neighbor(neighbor_name, addr, packet, timestamp)
 
             # Add neighbor to FIB
@@ -3084,4 +3177,4 @@ class Node:
                         if neighbor_port and (exclude_port is None or neighbor_port != exclude_port):
                             send_addr = (self.host, neighbor_port)
                             self.sock.sendto(ns_update_packet, send_addr)
-                            #print(f"[{self.name}] Sent NS UPDATE to {neighbor_name} at {send_addr}")
+                            print(f"[{self.name}] Sent NS UPDATE to {neighbor_name} at {send_addr}")
