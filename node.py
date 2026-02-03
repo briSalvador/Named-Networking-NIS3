@@ -790,6 +790,12 @@ class Node:
         with self.received_data_lock:
             self.received_data.add(name)
 
+    def reset_received_data(self, name):
+        """Reset the received data status for a given content name"""
+        with self.received_data_lock:
+            if name in self.received_data:
+                self.received_data.remove(name)
+
     def has_received_data(self, name):
         """Check if this node has received data for a given content name"""
         with self.received_data_lock:

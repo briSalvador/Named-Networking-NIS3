@@ -376,26 +376,33 @@ if __name__ == "__main__":
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # TEST CASE
-    interest_name = "/DLSU/Miguel/hello.txt"
-    miguel.add_cs(interest_name, "Hello from miguel!")
+    interest_name = "/UP/Salcedo/PC1/hello.txt"
+    upc1.add_cs(interest_name, "Hello from upc1")
+    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
     
-    def run_case():
-        send_interest_via_ns(henry, seq_num=0, name=interest_name, data_flag=False)
-    
-    test_case = threading.Thread(target=run_case)
-    test_case.start()
-    test_case.join()
-    
-    # Wait until Henry has received the data packet
+    # Wait until node has received the data packet
     max_wait_time = 10  # seconds
     start_time = time.time()
-    while not henry.has_received_data(interest_name):
+    while not dpc1.has_received_data(interest_name):
         if time.time() - start_time > max_wait_time:
-            print(f"[WARNING] Timeout waiting for {henry.name} to receive data for {interest_name}")
+            print(f"[WARNING] Timeout waiting for {dpc1.name} to receive data for {interest_name}")
             break
         time.sleep(0.1)
-    
-    print(f"[TEST] {henry.name} has received data for {interest_name}")
+
+    interest_name = "/UP/Salcedo/PC1/another_hello.txt"
+    upc1.add_cs(interest_name, "Another hello from upc1")
+
+    # Reset the received data status before sending again
+    dpc1.reset_received_data(interest_name)
+    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    max_wait_time = 10  # seconds
+    start_time = time.time()
+    while not dpc1.has_received_data(interest_name):
+        if time.time() - start_time > max_wait_time:
+            print(f"[WARNING] Timeout waiting for {dpc1.name} to receive data for {interest_name}")
+            break
+        time.sleep(0.1)
 
     # fib tables
     # print("\n--- FIB Tables ---")
