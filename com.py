@@ -34,6 +34,7 @@ class NetworkStatistics:
             'ROUTE_ACK': 0
         }
         self.total_data_bits_transferred = 0
+        self.total_hops = 0
         self.interest_data_pairs = {}  # {(origin, name, seq): {'interest_time': ts, 'data_time': ts}}
         self.start_time = datetime.now()
         self.end_time = None
@@ -71,7 +72,7 @@ class NetworkStatistics:
                         times['data_time'] = timestamp_dt
 
     
-    def record_packet(self, packet_type, size_bits=0):
+    def record_packet(self, packet_type, size_bits=0, size_bytes=0):
         """Record any packet type (but skip DATA/INTEREST as they're counted separately)"""
         with self.lock:
             packet_names = {
@@ -88,6 +89,14 @@ class NetworkStatistics:
                 # Skip double-counting DATA and INTEREST (recorded separately)
                 if packet_name not in ['DATA', 'INTEREST']:
                     self.packet_counts[packet_name] += 1
+                    # Track routing data bytes
+                    if packet_name == 'ROUTING_DATA' and size_bytes > 0:
+                        self.total_routing_bytes_transferred += size_bytes
+    
+    def record_hop(self):
+        """Record a hop when a node receives a non-HELLO/UPDATE packet"""
+        with self.lock:
+            self.total_hops += 1
     
     def finalize(self):
         """Mark the end of statistics collection"""
@@ -130,6 +139,7 @@ class NetworkStatistics:
             'packet_counts': self.packet_counts,
             'total_packets': total_packets,
             'total_data_bits': self.total_data_bits_transferred,
+            'total_hops': self.total_hops,
             'throughput_bps': throughput_bps,
             'throughput_kbps': throughput_kbps,
             'avg_latency_ms': avg_latency * 1000,
@@ -310,10 +320,10 @@ if __name__ == "__main__":
     # START HERE FOR DEMO
 
     # Test Case if filesize exceeds packet max
-    interest_name = "/DLSU/Miguel/cam1/hello.bin"
-    synthetic_data = bytes(range(256)) * 10  # 2.5 KB of repeating data
-    dcam1.add_cs(interest_name, synthetic_data)
-    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+    # interest_name = "/DLSU/Miguel/cam1/hello.bin"
+    # synthetic_data = bytes(range(256)) * 10  # 2.5 KB of repeating data
+    # dcam1.add_cs(interest_name, synthetic_data)
+    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
     # Test Case if interest is localized in the DLSU domain
     # interest_name = "/DLSU/Miguel/cam1/hello.txt"
@@ -364,6 +374,11 @@ if __name__ == "__main__":
     # Test case if destination does not have a filename
     # interest_name = "/DLSU/Miguel/cam1"
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+
+    # TEST CASE
+    interest_name = "/DLSU/Miguel/hello.txt"
+    miguel.add_cs(interest_name, "Hello from miguel!")
+    send_interest_via_ns(henry, seq_num=0, name=interest_name, data_flag=False)
 
     time.sleep(3)
 
@@ -777,6 +792,9 @@ def print_network_statistics():
     print(f"  Control Packets:        {stats['control_packets']} packets")
     print(f"  Control Overhead:       {stats['control_overhead_percent']:.2f}%")
     print(f"  Data Packet Ratio:      {100 - stats['control_overhead_percent']:.2f}%")
+    
+    print("\n[ROUTING HOPS]")
+    print(f"  Total Hops:             {stats['total_hops']} hops")
     
     print("\n" + "="*80)
 

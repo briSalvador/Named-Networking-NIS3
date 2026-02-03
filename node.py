@@ -772,6 +772,17 @@ class Node:
         except Exception as e:
             print(f"[STATS ERROR] Failed to record data: {e}")
 
+    def _record_hop_stat(self, packet_type):
+        """Record a hop for non-HELLO/UPDATE packets"""
+        try:
+            # Only record hops for packets that are not HELLO or UPDATE (those are initialization)
+            if packet_type not in [HELLO, UPDATE]:
+                gs = self._get_global_stats()
+                if gs:
+                    gs.record_hop()
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record hop: {e}")
+
         """ self.broadcast_listener_thread = threading.Thread(target=self._listen_broadcast, daemon=True)
         self.broadcast_listener_thread.start()
 
@@ -1399,6 +1410,13 @@ class Node:
                 from_ns = True
         except Exception:
             from_ns = False
+
+        # record hop for non-HELLO/UPDATE packets
+        if packet_type not in [HELLO, UPDATE]:
+            try:
+                self._record_hop_stat(packet_type)
+            except Exception:
+                pass
 
         if packet_type == INTEREST:
             parsed = parse_interest_packet(packet)
