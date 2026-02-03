@@ -443,6 +443,48 @@ class NameServer:
             self.logs = []
         self.logs.append({"timestamp": timestamp, "message": message})
 
+    # --- Statistics helpers (lazy lookup to avoid circular imports) ---
+    def _get_global_stats(self):
+        try:
+            import sys
+            # Try common module names first
+            for mod_name in ('com', '__main__'):
+                mod = sys.modules.get(mod_name)
+                if mod and hasattr(mod, 'global_stats'):
+                    return getattr(mod, 'global_stats')
+            # Fallback: scan loaded modules for any with a global_stats attr
+            for m in list(sys.modules.values()):
+                try:
+                    if hasattr(m, 'global_stats'):
+                        return getattr(m, 'global_stats')
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _record_packet_stat(self, packet):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            packet_type = (packet[0] >> 4) & 0xF if packet else None
+            size_bits = len(packet) * 8 if packet else 0
+            gs.record_packet(packet_type, size_bits)
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record packet: {e}")
+
+    def _record_hop_stat(self, packet_type):
+        """Record a hop for non-HELLO/UPDATE packets"""
+        try:
+            # Only record hops for packets that are not HELLO or UPDATE (those are initialization)
+            if packet_type not in [HELLO, UPDATE]:
+                gs = self._get_global_stats()
+                if gs:
+                    gs.record_hop()
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record hop: {e}")
+
     def __init__(self, ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt"):
         self.ns_name = ns_name
         self.host = host
@@ -584,6 +626,20 @@ class NameServer:
                 if not data:
                     continue
                 pkt_type = (data[0] >> 4) & 0xF
+                
+                # Record packet statistics
+                try:
+                    self._record_packet_stat(data)
+                except Exception:
+                    pass
+                
+                # Record hop for non-HELLO/UPDATE packets
+                if pkt_type not in [HELLO, UPDATE]:
+                    try:
+                        self._record_hop_stat(pkt_type)
+                    except Exception:
+                        pass
+                
                 if pkt_type == HELLO:
                     self._handle_hello(data, addr)
                 elif pkt_type == UPDATE:
