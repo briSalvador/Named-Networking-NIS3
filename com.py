@@ -378,9 +378,24 @@ if __name__ == "__main__":
     # TEST CASE
     interest_name = "/DLSU/Miguel/hello.txt"
     miguel.add_cs(interest_name, "Hello from miguel!")
-    send_interest_via_ns(henry, seq_num=0, name=interest_name, data_flag=False)
-
-    time.sleep(3)
+    
+    def run_case():
+        send_interest_via_ns(henry, seq_num=0, name=interest_name, data_flag=False)
+    
+    test_case = threading.Thread(target=run_case)
+    test_case.start()
+    test_case.join()
+    
+    # Wait until Henry has received the data packet
+    max_wait_time = 10  # seconds
+    start_time = time.time()
+    while not henry.has_received_data(interest_name):
+        if time.time() - start_time > max_wait_time:
+            print(f"[WARNING] Timeout waiting for {henry.name} to receive data for {interest_name}")
+            break
+        time.sleep(0.1)
+    
+    print(f"[TEST] {henry.name} has received data for {interest_name}")
 
     # fib tables
     # print("\n--- FIB Tables ---")

@@ -694,6 +694,8 @@ class Node:
         self.pit_interfaces = []
         self.name_to_port = {}  # Mapping from node names to their ports
         self.incoming_queue = queue.Queue()
+        self.received_data = set()  # Track names of DATA packets received at this node
+        self.received_data_lock = threading.Lock()
 
         self.log(f"Node started at {self.host}:{self.port} in domain(s): {self.domains}")
 
@@ -782,6 +784,16 @@ class Node:
                     gs.record_hop()
         except Exception as e:
             print(f"[STATS ERROR] Failed to record hop: {e}")
+
+    def record_data_received(self, name):
+        """Record that this node has received data for a given content name"""
+        with self.received_data_lock:
+            self.received_data.add(name)
+
+    def has_received_data(self, name):
+        """Check if this node has received data for a given content name"""
+        with self.received_data_lock:
+            return name in self.received_data
 
         """ self.broadcast_listener_thread = threading.Thread(target=self._listen_broadcast, daemon=True)
         self.broadcast_listener_thread.start()
@@ -2307,6 +2319,8 @@ class Node:
                     try:
                         self._record_data_stat(name, parsed["SequenceNumber"], full_payload_bytes, timestamp)
                         self.log(f"[STATS] Recorded DATA (reassembled) name={name} seq={parsed['SequenceNumber']}")
+                        # Record that this node has received the data
+                        self.record_data_received(name)
                     except Exception:
                         pass
                     # store raw bytes in CS
@@ -2364,6 +2378,8 @@ class Node:
                     payload_bytes = parsed.get("PayloadBytes") if parsed.get("PayloadBytes") is not None else (payload.encode('utf-8') if isinstance(payload, str) else payload)
                     self._record_data_stat(name, parsed["SequenceNumber"], payload_bytes, timestamp)
                     self.log(f"[STATS] Recorded DATA name={name} seq={parsed['SequenceNumber']}")
+                    # Record that this node has received the data
+                    self.record_data_received(name)
                 except Exception:
                     pass
                 self.add_cs(name, payload_bytes)
