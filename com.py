@@ -151,7 +151,113 @@ class NetworkStatistics:
         }
 
 # Global statistics instance
-global_stats = NetworkStatistics()
+class PhaseAwareStats:
+    """A wrapper that maintains separate NetworkStatistics objects for
+    different phases and delegates recording to the active phase.
+    """
+    def __init__(self, phase_names=None, default_phase=None):
+        phase_names = phase_names or ["initialization", "first_request", "second_request"]
+        self.phases = {name: NetworkStatistics() for name in phase_names}
+        self.active = default_phase or phase_names[0]
+
+    def set_phase(self, phase_name):
+        if phase_name not in self.phases:
+            self.phases[phase_name] = NetworkStatistics()
+        self.active = phase_name
+        st = self.phases[phase_name]
+        if st.start_time is None:
+            st.start_time = datetime.now()
+
+    def _active(self):
+        return self.phases[self.active]
+
+    @property
+    def interest_data_pairs(self):
+        combined = {}
+        for st in self.phases.values():
+            if hasattr(st, 'interest_data_pairs') and isinstance(st.interest_data_pairs, dict):
+                combined.update(st.interest_data_pairs)
+        return combined
+
+    # Delegate methods
+    def record_interest(self, origin_node, name, seq_num, timestamp):
+        return self._active().record_interest(origin_node, name, seq_num, timestamp)
+
+    def record_interest_query(self):
+        return self._active().record_interest_query()
+
+    def record_data(self, name, seq_num, payload_size, timestamp):
+        return self._active().record_data(name, seq_num, payload_size, timestamp)
+
+    def record_packet(self, packet_type, size_bits=0, size_bytes=0):
+        return self._active().record_packet(packet_type, size_bits=size_bits, size_bytes=size_bytes)
+
+    def record_hop(self):
+        return self._active().record_hop()
+
+    def finalize(self):
+        for st in self.phases.values():
+            try:
+                st.finalize()
+            except Exception:
+                pass
+
+    def calculate_latencies(self, phase=None):
+        if phase:
+            return self.phases[phase].calculate_latencies()
+        # aggregate
+        latencies = []
+        for st in self.phases.values():
+            latencies.extend(st.calculate_latencies())
+        return latencies
+
+    def get_statistics(self, phase=None):
+        # If a specific phase requested, return that phase's stats
+        if phase:
+            return self.phases[phase].get_statistics()
+
+        # Otherwise return combined stats across all phases
+        combined = {
+            'total_time': 0,
+            'packet_counts': {k: 0 for k in self._active().packet_counts.keys()},
+            'total_packets': 0,
+            'total_data_bits': 0,
+            'total_hops': 0,
+            'throughput_bps': 0,
+            'throughput_kbps': 0,
+            'avg_latency_ms': 0,
+            'max_latency_ms': 0,
+            'min_latency_ms': 0,
+            'control_packets': 0,
+            'control_overhead_percent': 0,
+            'completed_pairs': 0
+        }
+
+        all_latencies = []
+        for st in self.phases.values():
+            s = st.get_statistics()
+            combined['total_time'] += s['total_time']
+            for k, v in s['packet_counts'].items():
+                combined['packet_counts'][k] = combined['packet_counts'].get(k, 0) + v
+            combined['total_packets'] += s['total_packets']
+            combined['total_data_bits'] += s['total_data_bits']
+            combined['total_hops'] += s['total_hops']
+            combined['control_packets'] += s['control_packets']
+            all_latencies.extend(st.calculate_latencies())
+            combined['completed_pairs'] += s.get('completed_pairs', 0)
+
+        combined['throughput_bps'] = combined['total_data_bits'] / combined['total_time'] if combined['total_time'] > 0 else 0
+        combined['throughput_kbps'] = combined['throughput_bps'] / 1000
+        combined['avg_latency_ms'] = (sum(all_latencies) / len(all_latencies) * 1000) if all_latencies else 0
+        combined['max_latency_ms'] = (max(all_latencies) * 1000) if all_latencies else 0
+        combined['min_latency_ms'] = (min(all_latencies) * 1000) if all_latencies else 0
+        combined['control_overhead_percent'] = (combined['control_packets'] / combined['total_packets'] * 100) if combined['total_packets'] > 0 else 0
+
+        return combined
+
+
+# Global phase-aware statistics instance
+global_stats = PhaseAwareStats()
 
 # Export for other modules
 __all__ = ['global_stats', 'NetworkStatistics', 'DebugController']
@@ -183,6 +289,12 @@ if __name__ == "__main__":
             gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns, admu_ns, up_ns]
 
     # load all nodes
+    # Start statistics phase for initialization (hello/topology)
+    try:
+        global_stats.set_phase("initialization")
+    except Exception:
+        pass
+
     for node in nodes:
         # NameServers and Nodes both implement load_neighbors_from_file
         try:
@@ -398,7 +510,7 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[2]
+    orig = nodes[3]
     dest = nodes[10]
     interest_name1 = "/ADMU/Gonzaga/cam1/hello.txt"
     interest_name2 = "/ADMU/Gonzaga/cam1/another_hello.txt"
@@ -406,6 +518,11 @@ if __name__ == "__main__":
     msg2 = "Another hello from acam1"
 
     dest.add_cs(interest_name1, msg1)
+    # switch to first-request phase
+    try:
+        global_stats.set_phase("first_request")
+    except Exception:
+        pass
     send_interest_via_ns(orig, seq_num=0, name=interest_name1, data_flag=False)
     
     # Wait until node has received the data packet
@@ -421,6 +538,11 @@ if __name__ == "__main__":
 
     # Reset the received data status before sending again
     orig.reset_received_data(interest_name2)
+    # switch to second-request phase
+    try:
+        global_stats.set_phase("second_request")
+    except Exception:
+        pass
     send_interest_via_ns(orig, seq_num=0, name=interest_name2, data_flag=False)
 
     max_wait_time = 10  # seconds
@@ -794,57 +916,65 @@ controller = DebugController(nodes)
 
 def print_network_statistics():
     """Print comprehensive network statistics"""
+    # finalize and collect per-phase stats
     global_stats.finalize()
-    stats = global_stats.get_statistics()
-    
-    # Debug: Show raw data collection
+    phases = ["initialization", "first_request", "second_request"]
+    phase_stats = {p: global_stats.get_statistics(p) for p in phases}
+    combined = global_stats.get_statistics()
+
     print("\n" + "="*80)
-    print("DEBUG: RAW STATISTICS DATA")
+    print("NETWORK PERFORMANCE STATISTICS (PER PHASE)")
     print("="*80)
-    print(f"Total interests recorded: {stats['packet_counts']['INTEREST']}")
-    print(f"Total data packets recorded: {stats['packet_counts']['DATA']}")
-    print(f"Total bits transferred: {stats['total_data_bits']}")
-    print(f"Interest-data pairs: {stats['completed_pairs']}")
-    print(f"Raw interest_data_pairs dict size: {len(global_stats.interest_data_pairs)}")
-    if len(global_stats.interest_data_pairs) > 0:
-        print("Sample interest-data pairs:")
-        for i, (key, times) in enumerate(list(global_stats.interest_data_pairs.items())[:5]):
-            print(f"  {key}: {times}")
-    
+
+    for p in phases:
+        s = phase_stats[p]
+        print(f"\n[PHASE] {p}")
+        print(f"  Duration:           {s['total_time']:.3f} seconds")
+        print(f"  Total Data Bits:    {s['total_data_bits']} bits")
+        print(f"  Total Packets:      {s['total_packets']} packets")
+        print(f"  INTEREST:           {s['packet_counts'].get('INTEREST', 0)}")
+        print(f"  INTEREST_QUERY:     {s['packet_counts'].get('INTEREST_QUERY', 0)}")
+        print(f"  DATA:               {s['packet_counts'].get('DATA', 0)}")
+        print(f"  HELLO:              {s['packet_counts'].get('HELLO', 0)}")
+        print(f"  ROUTING_DATA:       {s['packet_counts'].get('ROUTING_DATA', 0)}")
+        print(f"  Control Packets:    {s['control_packets']} ({s['control_overhead_percent']:.2f}% overhead)")
+        print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
+        print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
+
     print("\n" + "="*80)
-    print("NETWORK PERFORMANCE STATISTICS")
+    print("NETWORK PERFORMANCE STATISTICS (COMBINED)")
     print("="*80)
-    
+
     print("\n[LATENCY METRICS]")
-    print(f"  Average Latency:        {stats['avg_latency_ms']:.3f} ms")
-    print(f"  Maximum Latency:        {stats['max_latency_ms']:.3f} ms")
-    print(f"  Minimum Latency:        {stats['min_latency_ms']:.3f} ms")
-    print(f"  Completed Interest-Data Pairs: {stats['completed_pairs']}")
-    
+    print(f"  Average Latency:        {combined['avg_latency_ms']:.3f} ms")
+    print(f"  Maximum Latency:        {combined['max_latency_ms']:.3f} ms")
+    print(f"  Minimum Latency:        {combined['min_latency_ms']:.3f} ms")
+    print(f"  Completed Interest-Data Pairs: {combined['completed_pairs']}")
+
     print("\n[THROUGHPUT METRICS]")
-    print(f"  Total Data Transmitted: {stats['total_data_bits']} bits ({stats['total_data_bits']/8:.1f} bytes)")
-    print(f"  Throughput:             {stats['throughput_bps']:.2f} bps ({stats['throughput_kbps']:.3f} kbps)")
-    print(f"  Test Duration:          {stats['total_time']:.3f} seconds")
-    
+    print(f"  Total Data Transmitted: {combined['total_data_bits']} bits ({combined['total_data_bits']/8:.1f} bytes)")
+    print(f"  Throughput:             {combined['throughput_bps']:.2f} bps ({combined['throughput_kbps']:.3f} kbps)")
+    print(f"  Test Duration:          {combined['total_time']:.3f} seconds")
+
     print("\n[PACKET TRANSMISSION OVERHEAD]")
-    print(f"  Total Packets Sent:     {stats['total_packets']} packets")
-    print(f"    - INTEREST packets:   {stats['packet_counts']['INTEREST']}")
-    print(f"    - INTEREST_QUERY packets: {stats['packet_counts']['INTEREST_QUERY']}")
-    print(f"    - DATA packets:       {stats['packet_counts']['DATA']}")
-    print(f"    - ROUTING_DATA:       {stats['packet_counts']['ROUTING_DATA']}")
-    print(f"    - HELLO packets:      {stats['packet_counts']['HELLO']}")
-    print(f"    - UPDATE packets:     {stats['packet_counts']['UPDATE']}")
-    print(f"    - ERROR packets:      {stats['packet_counts']['ERROR']}")
-    print(f"    - ROUTE_ACK packets:  {stats['packet_counts']['ROUTE_ACK']}")
-    
+    print(f"  Total Packets Sent:     {combined['total_packets']} packets")
+    print(f"    - INTEREST packets:   {combined['packet_counts'].get('INTEREST', 0)}")
+    print(f"    - INTEREST_QUERY packets: {combined['packet_counts'].get('INTEREST_QUERY', 0)}")
+    print(f"    - DATA packets:       {combined['packet_counts'].get('DATA', 0)}")
+    print(f"    - ROUTING_DATA:       {combined['packet_counts'].get('ROUTING_DATA', 0)}")
+    print(f"    - HELLO packets:      {combined['packet_counts'].get('HELLO', 0)}")
+    print(f"    - UPDATE packets:     {combined['packet_counts'].get('UPDATE', 0)}")
+    print(f"    - ERROR packets:      {combined['packet_counts'].get('ERROR', 0)}")
+    print(f"    - ROUTE_ACK packets:  {combined['packet_counts'].get('ROUTE_ACK', 0)}")
+
     print("\n[CONTROL OVERHEAD]")
-    print(f"  Control Packets:        {stats['control_packets']} packets")
-    print(f"  Control Overhead:       {stats['control_overhead_percent']:.2f}%")
-    print(f"  Data Packet Ratio:      {100 - stats['control_overhead_percent']:.2f}%")
-    
+    print(f"  Control Packets:        {combined['control_packets']} packets")
+    print(f"  Control Overhead:       {combined['control_overhead_percent']:.2f}%")
+    print(f"  Data Packet Ratio:      {100 - combined['control_overhead_percent']:.2f}%")
+
     print("\n[ROUTING HOPS]")
-    print(f"  Total Hops:             {stats['total_hops']} hops")
-    
+    print(f"  Total Hops:             {combined['total_hops']} hops")
+
     print("\n" + "="*80)
 
 """
