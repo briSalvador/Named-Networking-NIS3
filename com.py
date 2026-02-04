@@ -375,32 +375,55 @@ if __name__ == "__main__":
     # interest_name = "/DLSU/Miguel/cam1"
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
+    # 0 = dpc1
+    # 1 = andrew
+    # 2 = goks
+    # 3 = henry
+    # 4 = dlsu
+    # 5 = miguel
+    # 6 = dcam1
+    # 7 = dxa
+    # 8 = gonzaga
+    # 9 = admu
+    # 10 = acam1
+    # 11 = kostka
+    # 12 = axu
+    # 13 = up
+    # 14 = salcedo
+    # 15 = lara
+    # 16 = upc1
+    # 17 = ns
+    # 18 = admu_ns
+    # 19 = up_ns
     # TEST CASE
-    interest_name = "/UP/Salcedo/PC1/hello.txt"
-    upc1.add_cs(interest_name, "Hello from upc1")
-    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+    orig = nodes[2]
+    dest = nodes[10]
+
+    interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
+    dest.add_cs(interest_name, "Hello from acam1")
+    send_interest_via_ns(orig, seq_num=0, name=interest_name, data_flag=False)
     
     # Wait until node has received the data packet
     max_wait_time = 10  # seconds
     start_time = time.time()
-    while not dpc1.has_received_data(interest_name):
+    while not orig.has_received_data(interest_name):
         if time.time() - start_time > max_wait_time:
-            print(f"[WARNING] Timeout waiting for {dpc1.name} to receive data for {interest_name}")
+            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name}")
             break
         time.sleep(0.1)
 
-    interest_name = "/UP/Salcedo/PC1/another_hello.txt"
-    upc1.add_cs(interest_name, "Another hello from upc1")
+    interest_name = "/ADMU/Gonzaga/cam1/another_hello.txt"
+    dest.add_cs(interest_name, "Another hello from acam1")
 
     # Reset the received data status before sending again
-    dpc1.reset_received_data(interest_name)
-    send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
+    orig.reset_received_data(interest_name)
+    send_interest_via_ns(orig, seq_num=0, name=interest_name, data_flag=False)
 
     max_wait_time = 10  # seconds
     start_time = time.time()
-    while not dpc1.has_received_data(interest_name):
+    while not orig.has_received_data(interest_name):
         if time.time() - start_time > max_wait_time:
-            print(f"[WARNING] Timeout waiting for {dpc1.name} to receive data for {interest_name}")
+            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name}")
             break
         time.sleep(0.1)
 
