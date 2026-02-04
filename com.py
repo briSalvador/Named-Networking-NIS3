@@ -375,6 +375,8 @@ if __name__ == "__main__":
     # interest_name = "/DLSU/Miguel/cam1"
     # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
 
+    # TEST CASE
+
     # 0 = dpc1
     # 1 = andrew
     # 2 = goks
@@ -395,35 +397,37 @@ if __name__ == "__main__":
     # 17 = ns
     # 18 = admu_ns
     # 19 = up_ns
-    # TEST CASE
+    
     orig = nodes[2]
     dest = nodes[10]
+    interest_name1 = "/ADMU/Gonzaga/cam1/hello.txt"
+    interest_name2 = "/ADMU/Gonzaga/cam1/another_hello.txt"
+    msg1 = "Hello from acam1"
+    msg2 = "Another hello from acam1"
 
-    interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
-    dest.add_cs(interest_name, "Hello from acam1")
-    send_interest_via_ns(orig, seq_num=0, name=interest_name, data_flag=False)
+    dest.add_cs(interest_name1, msg1)
+    send_interest_via_ns(orig, seq_num=0, name=interest_name1, data_flag=False)
     
     # Wait until node has received the data packet
     max_wait_time = 10  # seconds
     start_time = time.time()
-    while not orig.has_received_data(interest_name):
+    while not orig.has_received_data(interest_name1):
         if time.time() - start_time > max_wait_time:
-            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name}")
+            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name1}")
             break
         time.sleep(0.1)
 
-    interest_name = "/ADMU/Gonzaga/cam1/another_hello.txt"
-    dest.add_cs(interest_name, "Another hello from acam1")
+    dest.add_cs(interest_name2, msg2)
 
     # Reset the received data status before sending again
-    orig.reset_received_data(interest_name)
-    send_interest_via_ns(orig, seq_num=0, name=interest_name, data_flag=False)
+    orig.reset_received_data(interest_name2)
+    send_interest_via_ns(orig, seq_num=0, name=interest_name2, data_flag=False)
 
     max_wait_time = 10  # seconds
     start_time = time.time()
-    while not orig.has_received_data(interest_name):
+    while not orig.has_received_data(interest_name2):
         if time.time() - start_time > max_wait_time:
-            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name}")
+            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name2}")
             break
         time.sleep(0.1)
 
