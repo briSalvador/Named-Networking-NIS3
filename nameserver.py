@@ -485,6 +485,17 @@ class NameServer:
         except Exception as e:
             print(f"[STATS ERROR] Failed to record hop: {e}")
 
+    def _record_interest_query_stat(self):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.log(f"[STATS] Recorded INTEREST QUERY timestamp={ts}")
+            gs.record_interest_query()
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record interest query: {e}")
+
     def __init__(self, ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt"):
         self.ns_name = ns_name
         self.host = host
@@ -872,6 +883,16 @@ class NameServer:
             print(f"[NS {self.ns_name}] INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")
             self.log(f" INTEREST from unknown {addr}. (No prior HELLO/UPDATE.)")
             src_name = "UNKNOWN"
+
+        # Check if this is a real interest (data_flag=True) or a query (data_flag=False)
+        is_real_interest = parsed.get("DataFlag", False)
+        kind = "REAL_INTEREST" if is_real_interest else "QUERY"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        print(f"[{self.ns_name}] Received INTEREST ({kind}) from port {addr[1]} at {timestamp} origin={src_name}")
+        self.log(f"[{self.ns_name}] Received INTEREST ({kind}) from port {addr[1]} at {timestamp}")
+
+        if kind == "QUERY":
+            self._record_interest_query_stat()
 
         enc_layers = []
         enc_border = None
