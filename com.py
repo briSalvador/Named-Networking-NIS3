@@ -533,8 +533,8 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[0]
-    dest = nodes[5]
+    orig = nodes[2]
+    dest = nodes[10]
     interest_name1 = "/DLSU/Miguel/hello.txt"
     interest_name2 = "/DLSU/Miguel/another_hello.txt"
     msg1 = "Hello from mig"
@@ -961,6 +961,8 @@ def print_network_statistics():
         print(f"  HELLO:              {s['packet_counts'].get('HELLO', 0)}")
         print(f"  UPDATE:             {s['packet_counts'].get('UPDATE', 0)}")
         print(f"  ROUTING_DATA:       {s['packet_counts'].get('ROUTING_DATA', 0)}")
+        print(f"  ROUTE_ACK:          {s['packet_counts'].get('ROUTE_ACK', 0)}")
+        print(f"  ERROR:              {s['packet_counts'].get('ERROR', 0)}")
         print(f"  Control Packets:    {s['control_packets']} ({s['control_overhead_percent']:.2f}% overhead)")
         print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
         print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
