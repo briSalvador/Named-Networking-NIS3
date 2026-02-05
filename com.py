@@ -36,7 +36,8 @@ class NetworkStatistics:
         self.total_data_bits_transferred = 0
         self.total_hops = 0
         self.interest_data_pairs = {}  # {(origin, name, seq): {'interest_time': ts, 'data_time': ts}}
-        self.start_time = datetime.now()
+        # start_time is set when the phase actually begins
+        self.start_time = None
         self.end_time = None
     
     def record_interest(self, origin_node, name, seq_num, timestamp):
@@ -122,7 +123,7 @@ class NetworkStatistics:
     
     def get_statistics(self):
         """Get comprehensive network statistics"""
-        total_time = (self.end_time - self.start_time).total_seconds() if self.end_time else 0
+        total_time = ((self.end_time - self.start_time).total_seconds() if (self.start_time and self.end_time) else 0)
         latencies = self.calculate_latencies()
         avg_latency = sum(latencies) / len(latencies) if latencies else 0
         max_latency = max(latencies) if latencies else 0
@@ -167,14 +168,19 @@ class PhaseAwareStats:
         phase_names = phase_names or ["initialization", "first_request", "second_request"]
         self.phases = {name: NetworkStatistics() for name in phase_names}
         self.active = default_phase or phase_names[0]
+        # mark the active phase start time when stats object is created
+        try:
+            self.phases[self.active].start_time = datetime.now()
+        except Exception:
+            pass
 
     def set_phase(self, phase_name):
         if phase_name not in self.phases:
             self.phases[phase_name] = NetworkStatistics()
         self.active = phase_name
         st = self.phases[phase_name]
-        if st.start_time is None:
-            st.start_time = datetime.now()
+        # (re)start the phase timer when the phase is set
+        st.start_time = datetime.now()
 
     def _active(self):
         return self.phases[self.active]
@@ -203,10 +209,19 @@ class PhaseAwareStats:
     def record_hop(self):
         return self._active().record_hop()
 
+    # Delegate hello/update so nodes can record these directly
+    def record_hello(self):
+        return self._active().record_hello()
+
+    def record_update(self):
+        return self._active().record_update()
+
     def finalize(self):
         for st in self.phases.values():
             try:
-                st.finalize()
+                # only finalize phases that have been started
+                if st.start_time is not None:
+                    st.finalize()
             except Exception:
                 pass
 
@@ -518,12 +533,12 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[3]
-    dest = nodes[10]
-    interest_name1 = "/ADMU/Gonzaga/cam1/hello.txt"
-    interest_name2 = "/ADMU/Gonzaga/cam1/another_hello.txt"
-    msg1 = "Hello from acam1"
-    msg2 = "Another hello from acam1"
+    orig = nodes[0]
+    dest = nodes[5]
+    interest_name1 = "/DLSU/Miguel/hello.txt"
+    interest_name2 = "/DLSU/Miguel/another_hello.txt"
+    msg1 = "Hello from mig"
+    msg2 = "Another hello from mig"
 
     dest.add_cs(interest_name1, msg1)
     # switch to first-request phase
@@ -944,6 +959,7 @@ def print_network_statistics():
         print(f"  INTEREST_QUERY:     {s['packet_counts'].get('INTEREST_QUERY', 0)}")
         print(f"  DATA:               {s['packet_counts'].get('DATA', 0)}")
         print(f"  HELLO:              {s['packet_counts'].get('HELLO', 0)}")
+        print(f"  UPDATE:             {s['packet_counts'].get('UPDATE', 0)}")
         print(f"  ROUTING_DATA:       {s['packet_counts'].get('ROUTING_DATA', 0)}")
         print(f"  Control Packets:    {s['control_packets']} ({s['control_overhead_percent']:.2f}% overhead)")
         print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
