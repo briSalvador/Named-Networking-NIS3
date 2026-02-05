@@ -655,6 +655,10 @@ class Node:
                     for port in ports:
                         try:
                             pkt = create_hello_packet(self.name)
+                            try:
+                                self._record_hello()
+                            except Exception:
+                                pass
                             self.sock.sendto(pkt, (self.host, int(port)))
                             print(f"[{self.name}] Sent HELLO to {self.host}:{port}")
                             self.log(f"Sent HELLO to {self.host}:{port}")
@@ -738,6 +742,24 @@ class Node:
             packet_type = (packet[0] >> 4) & 0xF if packet else None
             size_bits = len(packet) * 8 if packet else 0
             gs.record_packet(packet_type, size_bits)
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record packet: {e}")
+
+    def _record_hello(self):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            gs.record_hello()
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record packet: {e}")
+
+    def _record_update(self):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            gs.record_update()
         except Exception as e:
             print(f"[STATS ERROR] Failed to record packet: {e}")
 
@@ -1345,6 +1367,10 @@ class Node:
                     try:
                         # Create and send an update packet to inform NS of active neighbor
                         update_pkt = create_neighbor_update_packet(self.name, neighbor_name)
+                        try:
+                            self._record_update()
+                        except Exception:
+                            pass
                         self.sock.sendto(update_pkt, ("127.0.0.1", int(ns_port)))
 
                         msg = (f"[{self.name}] Sent topology UPDATE to {ns_name} "
@@ -1448,7 +1474,7 @@ class Node:
 
             # --- Encapsulation handling: INTERESTs created by NameServer use the form:
             # "ENCAP:<border_alias>|<original_name>"
-            # Nodes must not send encapsulated queries to their own NameServer; instead
+            # Nodes must not send encapsulatzed queries to their own NameServer; instead
             # forward encapsulated packet toward the border alias. When the border node
             # itself receives the ENCAP packet it strips it and continues normal processing.
             enc_layers = []
