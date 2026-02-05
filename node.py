@@ -1472,6 +1472,12 @@ class Node:
             file_name = parsed.get("FileName")
             has_filename = file_name is not None
 
+            kind = "REAL_INTEREST" if is_real_interest else "QUERY"
+            if kind == "QUERY":
+                self._record_interest_query_stat()
+            else:
+                self._record_interest_stat(parsed["SequenceNumber"], parsed["Name"])
+
             # --- Encapsulation handling: INTERESTs created by NameServer use the form:
             # "ENCAP:<border_alias>|<original_name>"
             # Nodes must not send encapsulatzed queries to their own NameServer; instead
@@ -1833,11 +1839,6 @@ class Node:
             kind = "REAL_INTEREST" if is_real_interest else "QUERY"
             print(f"[{self.name}] Received INTEREST ({kind}) from port {addr[1]} at {timestamp} origin={origin_node}")
             self.log(f"[{self.name}] Received INTEREST from port {addr[1]} at {timestamp}")
-
-            if kind == "QUERY":
-                self._record_interest_query_stat()
-            else:
-                self._record_interest_stat(parsed["SequenceNumber"], parsed["Name"])
 
             table, data = self.check_tables(parsed["Name"])
 
