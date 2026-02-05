@@ -1241,11 +1241,11 @@ class Node:
         # print(f"[{self.name}] Buffered originated interest for '{name}' -> {resolved_target}")
         #self.log(f"Sent NS QUERY seq={seq_num} '{name}' -> {resolved_target}")
         self.sock.sendto(query_pkt, ("127.0.0.1", self.port))
-        try:
-            # record originated interest
-            self._record_interest_stat(seq_num, name)
-        except Exception:
-            pass
+        # try:
+        #     # record originated interest
+        #     self._record_interest_stat(seq_num, name)
+        # except Exception:
+        #     pass
         # print(f"[{self.name}] Sent NS QUERY (seq={seq_num}) for '{name}' to {resolved_target} (data_flag=False)")
         # except Exception as e:
         #     print(f"[{self.name}] ERROR sending NS QUERY to {resolved_target}: {e}")
@@ -1836,6 +1836,8 @@ class Node:
 
             if kind == "QUERY":
                 self._record_interest_query_stat()
+            else:
+                self._record_interest_stat(parsed["SequenceNumber"], parsed["Name"])
 
             table, data = self.check_tables(parsed["Name"])
 
