@@ -495,6 +495,17 @@ class NameServer:
             gs.record_interest_query()
         except Exception as e:
             print(f"[STATS ERROR] Failed to record interest query: {e}")
+    
+    def _record_interest_stat(self, seq_num, name, timestamp=None):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            ts = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            self.log(f"[STATS] Recorded INTEREST seq={seq_num} name={name} origin={self.name} timestamp={ts}")
+            gs.record_interest(self.name, name, seq_num, ts)
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record interest: {e}")
 
     def __init__(self, ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt"):
         self.ns_name = ns_name
@@ -893,6 +904,8 @@ class NameServer:
 
         if kind == "QUERY":
             self._record_interest_query_stat()
+        else:
+            self._record_interest_stat(parsed["SequenceNumber"], parsed["Name"])
 
         enc_layers = []
         enc_border = None
