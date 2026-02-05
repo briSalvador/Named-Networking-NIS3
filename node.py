@@ -811,6 +811,13 @@ class Node:
         """Record that this node has received data for a given content name"""
         with self.received_data_lock:
             self.received_data.add(name)
+        # End the active stats phase when this node (origin) receives the requested data
+        try:
+            gs = self._get_global_stats()
+            if gs and hasattr(gs, 'end_active_phase'):
+                gs.end_active_phase()
+        except Exception:
+            pass
 
     def reset_received_data(self, name):
         """Reset the received data status for a given content name"""

@@ -176,12 +176,23 @@ class PhaseAwareStats:
             pass
 
     def set_phase(self, phase_name):
+        # End previous active phase (if it was started and not yet ended)
+        try:
+            prev = self.active
+            if prev in self.phases:
+                prev_st = self.phases[prev]
+                if prev_st.start_time is not None and prev_st.end_time is None:
+                    prev_st.end_time = datetime.now()
+        except Exception:
+            pass
+
         if phase_name not in self.phases:
             self.phases[phase_name] = NetworkStatistics()
         self.active = phase_name
         st = self.phases[phase_name]
         # (re)start the phase timer when the phase is set
         st.start_time = datetime.now()
+        st.end_time = None
 
     def _active(self):
         return self.phases[self.active]
@@ -221,10 +232,19 @@ class PhaseAwareStats:
         for st in self.phases.values():
             try:
                 # only finalize phases that have been started
-                if st.start_time is not None:
+                if st.start_time is not None and st.end_time is None:
                     st.finalize()
             except Exception:
                 pass
+
+    def end_active_phase(self):
+        """Explicitly end the currently active phase by setting its end_time."""
+        try:
+            st = self.phases.get(self.active)
+            if st and st.start_time is not None and st.end_time is None:
+                st.end_time = datetime.now()
+        except Exception:
+            pass
 
     def calculate_latencies(self, phase=None):
         if phase:
@@ -325,6 +345,13 @@ if __name__ == "__main__":
             node.load_neighbors_from_file("neighbors.txt")
         except Exception:
             pass
+    # End initialization phase now that neighbor loading is complete
+    try:
+        global_stats.end_active_phase()
+    except Exception:
+        pass
+    
+    # keep a short pause for network stabilization, but do not count it in initialization
     time.sleep(2)
 
     # Start periodic HELLO / neighbor-file reload every 30 seconds.
@@ -536,8 +563,8 @@ if __name__ == "__main__":
     
     orig = nodes[2]
     dest = nodes[10]
-    interest_name1 = "/DLSU/Miguel/hello.txt"
-    interest_name2 = "/DLSU/Miguel/another_hello.txt"
+    interest_name1 = "/ADMU/Gonzaga/cam1/hello.txt"
+    interest_name2 = "/ADMU/Gonzaga/cam1/another_hello.txt"
     msg1 = "Hello from mig"
     msg2 = "Another hello from mig"
 
