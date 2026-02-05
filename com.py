@@ -560,9 +560,9 @@ if __name__ == "__main__":
     # 17 = ns
     # 18 = admu_ns
     # 19 = up_ns
-    
-    orig = nodes[2]
-    dest = nodes[10]
+"""
+    orig = nodes[0]
+    dest = nodes[6]
     interest_name1 = "/ADMU/Gonzaga/cam1/hello.txt"
     interest_name2 = "/ADMU/Gonzaga/cam1/another_hello.txt"
     msg1 = "Hello from mig"
@@ -603,6 +603,60 @@ if __name__ == "__main__":
             print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name2}")
             break
         time.sleep(0.1)
+
+# destination does not exist
+print("\n[TEST] Testing error case: destination does not exist")
+error_origin = nodes[0]
+error_interest_name = "/DLSU/Miguel/cam2/nothing_here.txt"
+try:
+    global_stats.set_phase("error_test")
+except Exception:
+    pass
+send_interest_via_ns(error_origin, seq_num=0, name=error_interest_name, data_flag=False)
+    
+max_wait_time = 5
+start_time = time.time()
+while not error_origin.has_received_data(error_interest_name):
+    if time.time() - start_time > max_wait_time:
+        print(f"[INFO] No data received for {error_interest_name} (expected - destination doesn't exist)")
+        break
+    time.sleep(0.1)
+
+# destination exists but file does not
+print("\n[TEST] Testing error case: destination exists but file does not")
+error_origin2 = nodes[2]
+error_interest_name2 = "/DLSU/Miguel/cam1/nothing_here.txt"
+try:
+    global_stats.set_phase("error_test")
+except Exception:
+    pass
+send_interest_via_ns(error_origin2, seq_num=0, name=error_interest_name2, data_flag=False)
+    
+max_wait_time = 5
+start_time = time.time()
+while not error_origin2.has_received_data(error_interest_name2):
+    if time.time() - start_time > max_wait_time:
+        print(f"[INFO] No data received for {error_interest_name2} (expected - file doesn't exist at destination)")
+        break
+    time.sleep(0.1)
+"""
+# destination does not have a filename
+print("\n[TEST] Testing error case: destination does not have a filename")
+error_origin3 = nodes[0]
+error_interest_name3 = "/DLSU/Miguel/cam1"
+try:
+    global_stats.set_phase("error_test")
+except Exception:
+    pass
+send_interest_via_ns(error_origin3, seq_num=0, name=error_interest_name3, data_flag=False)
+    
+max_wait_time = 5
+start_time = time.time()
+while not error_origin3.has_received_data(error_interest_name3):
+    if time.time() - start_time > max_wait_time:
+        print(f"[INFO] No data received for {error_interest_name3} (expected - no filename provided)")
+        break
+    time.sleep(0.1)
 
     # fib tables
     # print("\n--- FIB Tables ---")
