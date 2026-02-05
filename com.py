@@ -134,11 +134,12 @@ class NetworkStatistics:
         throughput_kbps = throughput_bps / 1000
         
         # Count control packets (non-data)
-        control_packets = (self.packet_counts['HELLO'] + 
-                          self.packet_counts['UPDATE'] + 
-                          self.packet_counts['ROUTING_DATA'] +
+        control_packets = (self.packet_counts['ROUTING_DATA'] +
                           self.packet_counts['ERROR'] +
-                          self.packet_counts['ROUTE_ACK'])
+                          self.packet_counts['HELLO'] + 
+                          self.packet_counts['UPDATE'] + 
+                          self.packet_counts['ROUTE_ACK'] +
+                          self.packet_counts['INTEREST_QUERY'])
         
         total_packets = sum(self.packet_counts.values())
         control_overhead_percent = (control_packets / total_packets * 100) if total_packets > 0 else 0
