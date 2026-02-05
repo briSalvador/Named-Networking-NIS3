@@ -87,11 +87,19 @@ class NetworkStatistics:
             if packet_type in packet_names:
                 packet_name = packet_names[packet_type]
                 # Skip double-counting DATA and INTEREST (recorded separately)
-                if packet_name not in ['DATA', 'INTEREST']:
+                if packet_name not in ['DATA', 'INTEREST', 'HELLO', 'UPDATE']:
                     self.packet_counts[packet_name] += 1
                     # Track routing data bytes
                     if packet_name == 'ROUTING_DATA' and size_bytes > 0:
                         self.total_routing_bytes_transferred += size_bytes
+
+    def record_hello(self):
+        with self.lock:
+            self.packet_counts['HELLO'] += 1
+    
+    def record_update(self):
+        with self.lock:
+            self.packet_counts['UPDATE'] += 1
     
     def record_hop(self):
         """Record a hop when a node receives a non-HELLO/UPDATE packet"""
@@ -398,7 +406,7 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[2]
+    orig = nodes[3]
     dest = nodes[10]
     interest_name1 = "/ADMU/Gonzaga/cam1/hello.txt"
     interest_name2 = "/ADMU/Gonzaga/cam1/another_hello.txt"
