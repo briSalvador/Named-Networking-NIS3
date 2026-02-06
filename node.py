@@ -3136,6 +3136,12 @@ class Node:
                 else:
                     self.remove_pit(parsed["Name"])
                     self.log(f"[{self.name}] Received ERROR for '{parsed['Name']}' — removed PIT entry")
+                    try:
+                        # Treat an ERROR delivered to the origin as a terminal response so
+                        # callers waiting on has_received_data() can proceed immediately.
+                        self.record_data_received(parsed["Name"])
+                    except Exception:
+                        pass
             return
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")

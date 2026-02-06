@@ -352,7 +352,7 @@ if __name__ == "__main__":
         pass
     
     # keep a short pause for network stabilization, but do not count it in initialization
-    time.sleep(2)
+    time.sleep(1)
 
     # Start periodic HELLO / neighbor-file reload every 30 seconds.
     # This ensures NameServers and Nodes re-announce and re-learn neighbor ports.
@@ -561,12 +561,12 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[0]
+    orig = nodes[2]
     dest = nodes[5]
-    interest_name1 = "/DLSU/Miguel/hello.txt"
-    interest_name2 = "/DLSU/Miguel/another_hello.txt"
-    msg1 = "Hello from mig"
-    msg2 = "Another hello from mig"
+    interest_name1 = "/DLSU/Miguel/data.txt"
+    interest_name2 = "/DLSU/Miguel/info.txt"
+    msg1 = "Hello from mig1"
+    msg2 = "Hello from mig2"
 
     dest.add_cs(interest_name1, msg1)
     # switch to first-request phase
