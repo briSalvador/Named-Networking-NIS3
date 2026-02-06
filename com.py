@@ -560,11 +560,11 @@ if __name__ == "__main__":
     # 17 = ns
     # 18 = admu_ns
     # 19 = up_ns
-"""
+    
     orig = nodes[0]
-    dest = nodes[6]
-    interest_name1 = "/ADMU/Gonzaga/cam1/hello.txt"
-    interest_name2 = "/ADMU/Gonzaga/cam1/another_hello.txt"
+    dest = nodes[5]
+    interest_name1 = "/DLSU/Miguel/hello.txt"
+    interest_name2 = "/DLSU/Miguel/another_hello.txt"
     msg1 = "Hello from mig"
     msg2 = "Another hello from mig"
 
@@ -589,6 +589,7 @@ if __name__ == "__main__":
 
     # Reset the received data status before sending again
     orig.reset_received_data(interest_name2)
+
     # switch to second-request phase
     try:
         global_stats.set_phase("second_request")
@@ -604,7 +605,7 @@ if __name__ == "__main__":
             break
         time.sleep(0.1)
 
-# destination does not exist
+""" # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
 error_origin = nodes[0]
 error_interest_name = "/DLSU/Miguel/cam2/nothing_here.txt"
@@ -638,7 +639,8 @@ while not error_origin2.has_received_data(error_interest_name2):
     if time.time() - start_time > max_wait_time:
         print(f"[INFO] No data received for {error_interest_name2} (expected - file doesn't exist at destination)")
         break
-    time.sleep(0.1)
+    time.sleep(0.1) """
+    
 """
 # destination does not have a filename
 print("\n[TEST] Testing error case: destination does not have a filename")
@@ -657,7 +659,7 @@ while not error_origin3.has_received_data(error_interest_name3):
         print(f"[INFO] No data received for {error_interest_name3} (expected - no filename provided)")
         break
     time.sleep(0.1)
-
+"""
     # fib tables
     # print("\n--- FIB Tables ---")
     # print("dpc1 FIB:", dpc1.fib)
@@ -1047,6 +1049,8 @@ def print_network_statistics():
         print(f"  ERROR:              {s['packet_counts'].get('ERROR', 0)}")
         print(f"  Control Packets:    {s['control_packets']} ({s['control_overhead_percent']:.2f}% overhead)")
         print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
+        print(f"  Throughput:         {s['throughput_bps']:.3f} bps")
+        print(f"  Total Hops:         {s['total_hops']} hops")
         print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
 
     print("\n" + "="*80)
