@@ -906,8 +906,6 @@ class NameServer:
 
         if kind == "QUERY":
             self._record_interest_query_stat()
-        else:
-            self._record_interest_stat(parsed["SequenceNumber"], parsed["Name"])
 
         enc_layers = []
         enc_border = None
@@ -1211,6 +1209,7 @@ class NameServer:
             else:
                 resp = create_route_data_packet(seq_num=seq_num, name=original_name, payload=route_payload, flags=ACK_FLAG)
                 self.sock.sendto(resp, addr)
+                self._record_packet_stat(resp)
                 print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={next_hop}) to {addr}")
                 self.log(f" Sent ROUTE (next_hop={next_hop}) to {addr}")
 
@@ -1443,6 +1442,7 @@ class NameServer:
                     try:
                         target = (self.host, int(hop_port))
                         self.sock.sendto(resp, target)
+                        self._record_packet_stat(resp)
                         print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={first_hop_border}) to {first_hop_origin} neighbor")
                         return
                     except Exception as e:
@@ -1454,6 +1454,7 @@ class NameServer:
                 try:
                     target = (self.host, int(origin_port))
                     self.sock.sendto(resp, target)
+                    self._record_packet_stat(resp)
                     print(f"[NS {self.ns_name}] Sent ROUTE (next_hop={origin_node}) to {target}")
                     return
                 except Exception as e:
@@ -1462,6 +1463,7 @@ class NameServer:
             if recorded_addr:
                 try:
                     self.sock.sendto(resp, recorded_addr)
+                    self._record_packet_stat(resp)
                     print(f"[NS {self.ns_name}] Sent ROUTE (fallback) to recorded addr {recorded_addr} for {original_target}")
                     return
                 except Exception as e:
@@ -1473,6 +1475,7 @@ class NameServer:
                 for a in pit_addrs:
                     try:
                         self.sock.sendto(resp, a)
+                        self._record_packet_stat(resp)
                         print(f"[NS {self.ns_name}] Sent ROUTE_DATA to PIT recorded addr {a} for {original_target}")
                     except Exception as e:
                         print(f"[NS {self.ns_name}] Failed sending ROUTE_DATA to PIT addr {a}: {e}")
@@ -1523,6 +1526,7 @@ class NameServer:
             if origin_port:
                 try:
                     self.sock.sendto(resp, (self.host, int(origin_port)))
+                    self._record_packet_stat(resp)
                     print(f"[NS {self.ns_name}] Sent ROUTE_DATA directly to origin {origin_node} at port {origin_port}")
                 except Exception as e:
                     print(f"[NS {self.ns_name}] Failed to send ROUTE_DATA to origin {origin_node} at port {origin_port}: {e}")
@@ -1535,6 +1539,7 @@ class NameServer:
                 return
             try:
                 self.sock.sendto(resp, (self.host, int(port)))
+                self._record_packet_stat(resp)
                 print(f"[NS {self.ns_name}] Sent ROUTE_DATA (border_first_hop={first_hop_border}) "
                     f"to first_hop {first_hop_origin} (port {port}) for {original_target} toward origin {origin_node}")
             except Exception as e:

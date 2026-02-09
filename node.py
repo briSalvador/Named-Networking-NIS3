@@ -1247,6 +1247,7 @@ class Node:
 
         #self.add_to_buffer(query_pkt, resolved_target, reason="Originated Interest (NS query)")
         query_pkt = create_interest_packet(seq_num, name, flags, origin_node=self.name, data_flag=True)
+        self._record_interest_stat(seq_num, name)
         # self.log(f"[{self.name}] Buffered originated interest for '{name}' -> {resolved_target}")
         # print(f"[{self.name}] Buffered originated interest for '{name}' -> {resolved_target}")
         #self.log(f"Sent NS QUERY seq={seq_num} '{name}' -> {resolved_target}")
@@ -1452,14 +1453,10 @@ class Node:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
         # record any incoming packet (control packets counted here; DATA/INTEREST handled by their own recorders)
-        try:
-            # Do not record ROUTE_ACK or ERROR here; these are counted at creation
-            # (ROUTE_ACK by NameServer at creation; ERROR only when delivered to origin)
-            pkt_t = (packet[0] >> 4) & 0xF if packet else None
-            if pkt_t not in [ROUTE_ACK, ERROR]:
-                self._record_packet_stat(packet)
-        except Exception:
-            pass
+        # try:
+        #     self._record_packet_stat(packet)
+        # except Exception:
+        #     pass
 
         # convenience: is this packet arriving from a known NameServer port?
         from_ns = False
@@ -1486,11 +1483,11 @@ class Node:
             file_name = parsed.get("FileName")
             has_filename = file_name is not None
 
-            kind = "REAL_INTEREST" if is_real_interest else "QUERY"
-            if kind == "QUERY":
-                self._record_interest_query_stat()
-            else:
-                self._record_interest_stat(parsed["SequenceNumber"], parsed["Name"])
+            # kind = "REAL_INTEREST" if is_real_interest else "QUERY"
+            # if kind == "QUERY":
+            #     self._record_interest_query_stat()
+            # else:
+            #     self._record_interest_stat(parsed["SequenceNumber"], parsed["Name"])
 
             # --- Encapsulation handling: INTERESTs created by NameServer use the form:
             # "ENCAP:<border_alias>|<original_name>"
@@ -1703,7 +1700,6 @@ class Node:
                                         data_flag=False,
                                         visited_domains=list(visited)
                                     )
-
                                     self.sock.sendto(query_pkt, ("127.0.0.1", int(own_ns_port)))
                                     print(f"[{self.name}] Asked own NS {own_ns} for location of {target_ns}")
                                     self.log(f"[{self.name}] Asked own NS {own_ns} for target NS {target_ns}")

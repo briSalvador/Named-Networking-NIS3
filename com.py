@@ -561,12 +561,12 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[0]
-    dest = nodes[6]
-    interest_name1 = "/DLSU/Miguel/cam1/data.txt"
-    interest_name2 = "/DLSU/Miguel/cam1/info.txt"
-    msg1 = "Hello from dcam1"
-    msg2 = "Hello from dcam2"
+    orig = nodes[3]
+    dest = nodes[10]
+    interest_name1 = "/ADMU/Gonzaga/cam1/data.txt"
+    interest_name2 = "/ADMU/Gonzaga/cam1/info.txt"
+    msg1 = "Hello from acam1"
+    msg2 = "Hello from acam2"
 
     dest.add_cs(interest_name1, msg1)
     # switch to first-request phase
@@ -574,7 +574,7 @@ if __name__ == "__main__":
         global_stats.set_phase("first_request")
     except Exception:
         pass
-    send_interest_via_ns(orig, seq_num=0, name="/DLSU/Miguel/cam1/spot.txt", data_flag=False)
+    send_interest_via_ns(orig, seq_num=0, name=interest_name1, data_flag=False)
     
     # Wait until node has received the data packet
     max_wait_time = 10  # seconds
