@@ -649,9 +649,11 @@ class NameServer:
                     continue
                 pkt_type = (data[0] >> 4) & 0xF
                 
-                # Record packet statistics
+                # Record packet statistics — but skip ROUTE_ACK here;
+                # NameServer records ROUTE_ACK when it creates them (avoid double-counting).
                 try:
-                    self._record_packet_stat(data)
+                    if pkt_type != ROUTE_ACK:
+                        self._record_packet_stat(data)
                 except Exception:
                     pass
                 
@@ -1198,6 +1200,11 @@ class NameServer:
                             hop_count=hop_count_to_dest,
                             visited_domains=parsed.get("VisitedDomains", [])
                         )
+                try:
+                    # Record that the NameServer created/sent a ROUTE_ACK
+                    self._record_packet_stat(ack_pkt)
+                except Exception:
+                    pass
                 print(f"[NS {self.ns_name}] Sent ROUTE_ACK for ENCAP name='{enc_name}' (full='{parsed.get('Name')}', hop_count={hop_count_to_dest}) to {addr}")
                 self.log(f" Sent ROUTE_ACK for ENCAP name='{enc_name}' (full='{parsed.get('Name')}', hop_count={hop_count_to_dest}) to {addr}")
                 self.sock.sendto(ack_pkt, addr)

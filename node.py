@@ -740,6 +740,9 @@ class Node:
             if not gs:
                 return
             packet_type = (packet[0] >> 4) & 0xF if packet else None
+            # Do not count ROUTE_ACK packets here; NameServer will record when it creates them
+            if packet_type == ROUTE_ACK:
+                return
             size_bits = len(packet) * 8 if packet else 0
             gs.record_packet(packet_type, size_bits)
         except Exception as e:
@@ -1450,7 +1453,11 @@ class Node:
 
         # record any incoming packet (control packets counted here; DATA/INTEREST handled by their own recorders)
         try:
-            self._record_packet_stat(packet)
+            # Do not record ROUTE_ACK or ERROR here; these are counted at creation
+            # (ROUTE_ACK by NameServer at creation; ERROR only when delivered to origin)
+            pkt_t = (packet[0] >> 4) & 0xF if packet else None
+            if pkt_t not in [ROUTE_ACK, ERROR]:
+                self._record_packet_stat(packet)
         except Exception:
             pass
 
@@ -2358,13 +2365,9 @@ class Node:
                         print(re_pkt_obj)
                     except Exception:
                         pass
-                    try:
-                        self._record_data_stat(name, parsed["SequenceNumber"], full_payload_bytes, timestamp)
-                        self.log(f"[STATS] Recorded DATA (reassembled) name={name} seq={parsed['SequenceNumber']}")
-                        # Record that this node has received the data
-                        self.record_data_received(name)
-                    except Exception:
-                        pass
+                    # Recording of DATA stats is deferred until the content is
+                    # actually delivered to the original requester (local delivery).
+                    # See handling below where PIT interfaces equal `self.port`.
                     # store raw bytes in CS
                     try:
                         self.add_cs(name, full_payload_bytes)
@@ -2388,6 +2391,13 @@ class Node:
 
                             # If the PIT interface points to this node's own UDP port, deliver locally
                             if int(interface) == int(self.port):
+                                # local delivery to this node => original requester receives DATA
+                                try:
+                                    self._record_data_stat(name, parsed.get("SequenceNumber"), full_payload_bytes, timestamp)
+                                    self.log(f"[STATS] Recorded DATA (reassembled) name={name} seq={parsed.get('SequenceNumber')}")
+                                    self.record_data_received(name)
+                                except Exception:
+                                    pass
                                 # remove the PIT entry and treat as local delivery; do not send over UDP
                                 self.remove_pit(name, interface)
                                 self.log(f"[{self.name}] Delivered reassembled DATA locally (would have sent to self.port {self.port}); suppressing UDP send")
@@ -2415,15 +2425,12 @@ class Node:
                 print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
                 print(f"Parsed: {parsed}")
                 print(f"Object: {pkt_obj}")
+                # Defer recording: only count when data is delivered to originator
                 try:
                     payload = parsed.get("Payload")
                     payload_bytes = parsed.get("PayloadBytes") if parsed.get("PayloadBytes") is not None else (payload.encode('utf-8') if isinstance(payload, str) else payload)
-                    self._record_data_stat(name, parsed["SequenceNumber"], payload_bytes, timestamp)
-                    self.log(f"[STATS] Recorded DATA name={name} seq={parsed['SequenceNumber']}")
-                    # Record that this node has received the data
-                    self.record_data_received(name)
                 except Exception:
-                    pass
+                    payload_bytes = b""
                 self.add_cs(name, payload_bytes)
                 if name in self.pit:
                     interfaces = list(self.pit[name])
@@ -2442,6 +2449,13 @@ class Node:
 
                         # If the PIT interface points to this node's own UDP port, deliver locally
                         if int(interface) == int(self.port):
+                            # local delivery to this node => original requester receives DATA
+                            try:
+                                self._record_data_stat(name, parsed.get("SequenceNumber"), payload_bytes, timestamp)
+                                self.log(f"[STATS] Recorded DATA name={name} seq={parsed.get('SequenceNumber')}")
+                                self.record_data_received(name)
+                            except Exception:
+                                pass
                             # remove the PIT entry and treat as local delivery; do not send over UDP
                             self.remove_pit(name, interface)
                             self.log(f"[{self.name}] Delivered reassembled DATA locally (would have sent to self.port {self.port}); suppressing UDP send")
@@ -3139,6 +3153,11 @@ class Node:
                     try:
                         # Treat an ERROR delivered to the origin as a terminal response so
                         # callers waiting on has_received_data() can proceed immediately.
+                        # Record ERROR packet stats only when delivered to the original requester.
+                        try:
+                            self._record_packet_stat(packet)
+                        except Exception:
+                            pass
                         self.record_data_received(parsed["Name"])
                     except Exception:
                         pass
