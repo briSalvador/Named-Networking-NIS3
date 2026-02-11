@@ -506,7 +506,7 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[1]
+    orig = nodes[3]
     dest = nodes[5]
     interest_name1 = "/DLSU/Miguel/data.txt"
     interest_name2 = "/DLSU/Miguel/info.txt"

@@ -507,6 +507,16 @@ class NameServer:
         except Exception as e:
             print(f"[STATS ERROR] Failed to record interest: {e}")
 
+    def _record_update(self):
+        """Record an UPDATE packet reception (count at NameServer side)."""
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            gs.record_update()
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record update: {e}")
+
     def __init__(self, ns_name="/DLSU/NameServer1", host="127.0.0.1", port=6000, topo_file="topology.txt"):
         self.ns_name = ns_name
         self.host = host
@@ -743,13 +753,27 @@ class NameServer:
             # Add bidirectional edges
             combined_neighbor = " ".join(neighbor_nodes)
 
-            # Add connection both ways
+            # Add connection both ways. Only count the UPDATE if it actually
+            # changes the topology (prevents duplicate/forwarded UPDATEs from
+            # inflating the statistics).
+            prev_a = combined_neighbor in self.graph.get(combined_name, set())
+            prev_b = combined_name in self.graph.get(combined_neighbor, set())
+
             self.graph[combined_name].add(combined_neighbor)
             if combined_neighbor not in self.graph:
                 self.graph[combined_neighbor] = set()
             self.graph[combined_neighbor].add(combined_name)
 
+            made_change = not (prev_a and prev_b)
+
             print(f"[{self.ns_name}] UPDATE accepted: {combined_name} ↔ {combined_neighbor}")
+
+            # Count this UPDATE only if it actually modified the graph
+            if made_change:
+                try:
+                    self._record_update()
+                except Exception:
+                    pass
 
             # --- Save topology to file ---
             self._write_topology_to_file()

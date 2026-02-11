@@ -1378,21 +1378,19 @@ class Node:
                     try:
                         # Create and send an update packet to inform NS of active neighbor
                         update_pkt = create_neighbor_update_packet(self.name, neighbor_name)
+                        # send NEIGHBOR UPDATE to NameServer; record only when NS accepts
                         try:
-                            self._record_update()
-                        except Exception:
-                            pass
-                        self.sock.sendto(update_pkt, ("127.0.0.1", int(ns_port)))
-
-                        msg = (f"[{self.name}] Sent topology UPDATE to {ns_name} "
-                            f"(port {ns_port}) about neighbor {neighbor_name}")
-                        print(msg)
-                        self.log(msg)
-
-                    except Exception as e:
-                        self.add_to_buffer(packet, addr, reason="Error sending UPDATE to NameServer")
-                        print(f"[{self.name}] Error sending UPDATE to NS {ns_name}: {e}")
-                        self.log(f"[{self.name}] Error sending UPDATE to NS {ns_name}: {e}")
+                            self.sock.sendto(update_pkt, ("127.0.0.1", int(ns_port)))
+                        except Exception as e:
+                            self.add_to_buffer(packet, addr, reason="Error sending UPDATE to NameServer")
+                            print(f"[{self.name}] Error sending UPDATE to NS {ns_name}: {e}")
+                            self.log(f"[{self.name}] Error sending UPDATE to NS {ns_name}: {e}")
+                        else:
+                            msg = (f"[{self.name}] Sent topology UPDATE to {ns_name} "
+                                f"(port {ns_port}) about neighbor {neighbor_name}")
+                            print(msg)
+                            self.log(msg)
+                    except: Exception 
 
                 else:
                     # No valid FIB entry to NS — buffer packet for retry
