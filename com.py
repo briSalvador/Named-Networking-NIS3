@@ -483,79 +483,6 @@ if __name__ == "__main__":
 
         origin_node.send_interest(seq_num=seq_num, name=name, target=target, data_flag=data_flag)
 
-    # Test Case if within ADMU domain
-    # interest_name = "/ADMU/hello.txt"
-    # admu.add_cs(interest_name, "Hello from ADMU!")
-    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case if within UP domain
-    # interest_name = "/UP/hello.txt"
-    # up.add_cs(interest_name, "Hello from UP!")
-    # send_interest_via_ns(upc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test case for ADMU -> UP interdomain interests
-    # interest_name = "/UP/Salcedo/PC1/hello.txt"
-    # upc1.add_cs(interest_name, "Hello from upc1!")
-    # send_interest_via_ns(acam1, seq_num=0, name=interest_name, data_flag=False)
-
-    # START HERE FOR DEMO
-
-    # Test Case if filesize exceeds packet max
-    # interest_name = "/DLSU/Miguel/cam1/hello.bin"
-    # synthetic_data = bytes(range(256)) * 10  # 2.5 KB of repeating data
-    # dcam1.add_cs(interest_name, synthetic_data)
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case if interest is localized in the DLSU domain
-    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
-    # dcam1.add_cs(interest_name, "Hello from cam1!")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case to check the presence of a file in the CS (intradomain) (bri)
-    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
-    # dcam1.add_cs(interest_name, "Hello from cam1")
-    # send_interest_via_ns(andrew, seq_num=0, name=interest_name, data_flag=False)
-    # time.sleep(5)
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case to check the presence of a node in the PIT (intradomain)
-    # interest_name = "/DLSU/Miguel/cam1/hello.txt"
-    # dcam1.add_cs(interest_name, "Hello from cam1")
-    # send_interest_via_ns(andrew, seq_num=0, name=interest_name, data_flag=False)
-    # time.sleep(5)
-    # interest_name = "/DLSU/Miguel/cam1/hi.txt"
-    # dcam1.add_cs(interest_name, "Hi from cam1")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case if interest is in an adjacent domain (DLSU->ADMU)
-    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
-    # acam1.add_cs(interest_name, "Hello from acam")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case to check the presence of a file in the CS (interdomain)
-    # interest_name = "/ADMU/Gonzaga/cam1/hello.txt"
-    # acam1.add_cs(interest_name, "Hello from acam")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-    # time.sleep(5)
-    # send_interest_via_ns(dcam1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case if interest is in a non-adjacent domain (DLSU->UP)
-    # interest_name = "/UP/Salcedo/PC1/hello.txt"
-    # upc1.add_cs(interest_name, "Hello from upc1")
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case if destination does not exist
-    # interest_name = "/DLSU/Miguel/cam2/nothing_here.txt"
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
-    # Test Case if destination exists but file does not
-    # interest_name = "/DLSU/Miguel/cam1/nothing_here.txt"
-    # send_interest_via_ns(goks, seq_num=0, name=interest_name, data_flag=False)
-    
-    # Test case if destination does not have a filename
-    # interest_name = "/DLSU/Miguel/cam1"
-    # send_interest_via_ns(dpc1, seq_num=0, name=interest_name, data_flag=False)
-
     # TEST CASE
 
     # 0 = dpc1
@@ -579,10 +506,10 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[3]
-    dest = nodes[10]
-    interest_name1 = "/ADMU/Gonzaga/cam1/data.txt"
-    interest_name2 = "/ADMU/Gonzaga/cam1/info.txt"
+    orig = nodes[1]
+    dest = nodes[5]
+    interest_name1 = "/DLSU/Miguel/data.txt"
+    interest_name2 = "/DLSU/Miguel/info.txt"
     msg1 = "Hello from dest1"
     msg2 = "Hello from dest2"
 
@@ -601,7 +528,7 @@ if __name__ == "__main__":
         if time.time() - start_time > max_wait_time:
             print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name1}")
             break
-        time.sleep(0.1)
+        time.sleep(0.001)
 
     dest.add_cs(interest_name2, msg2)
 
@@ -621,7 +548,7 @@ if __name__ == "__main__":
         if time.time() - start_time > max_wait_time:
             print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name2}")
             break
-        time.sleep(0.1)
+        time.sleep(0.001)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")

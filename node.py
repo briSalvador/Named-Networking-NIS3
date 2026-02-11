@@ -1229,7 +1229,7 @@ class Node:
                         except Exception as e:
                             self.log(f"BUFFER_ENTRY_PROC_EXC: {e}")
                 # sleep a bit
-                time.sleep(0.1)
+                time.sleep(0.001)
             except Exception as e:
                 self.log(f"_process_buffer_loop EXC: {e}")
 
@@ -3213,7 +3213,7 @@ class Node:
             self.sock.sendto(b"", (self.host, self.port))
         except Exception:
             pass
-        time.sleep(0.1)
+        time.sleep(0.001)
         self.sock.close()
 
     def remove_fib(self, name):
