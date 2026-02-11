@@ -308,11 +308,11 @@ class PhaseAwareStats:
             all_latencies.extend(st.calculate_latencies())
             combined['completed_pairs'] += s.get('completed_pairs', 0)
 
-        combined['throughput_bps'] = combined['total_data_bits'] / combined['total_time'] if combined['total_time'] > 0 else 0
-        combined['throughput_kbps'] = combined['throughput_bps'] / 1000
         combined['avg_latency_ms'] = (sum(all_latencies) / len(all_latencies) * 1000) if all_latencies else 0
         combined['max_latency_ms'] = (max(all_latencies) * 1000) if all_latencies else 0
         combined['min_latency_ms'] = (min(all_latencies) * 1000) if all_latencies else 0
+        combined['throughput_bps'] = combined['total_data_bits'] / (combined['avg_latency_ms'] / 1000) if combined['avg_latency_ms'] > 0 else 0
+        combined['throughput_kbps'] = combined['throughput_bps'] / 1000
         combined['control_overhead_percent'] = (combined['control_packets'] / combined['total_packets'] * 100) if combined['total_packets'] > 0 else 0
 
         return combined
