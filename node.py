@@ -1475,6 +1475,15 @@ class Node:
 
         if packet_type == INTEREST:
             parsed = parse_interest_packet(packet)
+            # Only record an interest hop for "real" interests (DataFlag==True).
+            # Name-server queries (DataFlag==False) should not be counted
+            # in the Interest/Data path statistics.
+            try:
+                gs = self._get_global_stats()
+                if gs and parsed.get("DataFlag"):
+                    gs.record_interest_hop(parsed.get("OriginNode"), parsed.get("Name"), parsed.get("SequenceNumber"), self.name)
+            except Exception:
+                pass
             # preserve the raw name as parsed from the packet (use this for ns query bookkeeping)
             raw_interest_name = parsed.get("Name")
             is_real_interest = parsed["DataFlag"]
@@ -1845,6 +1854,13 @@ class Node:
                 flags=parsed["Flags"],
                 timestamp=timestamp
             )
+            # Preserve the parsed OriginNode on the packet object so
+            # forwarded INTERESTs keep the original origin (prevents
+            # origin field being replaced by intermediate routers).
+            try:
+                pkt_obj.origin_node = parsed.get("OriginNode")
+            except Exception:
+                pass
             # clearer logging: distinguish QUERY vs REAL INTEREST
             kind = "REAL_INTEREST" if is_real_interest else "QUERY"
             print(f"[{self.name}] Received INTEREST ({kind}) from port {addr[1]} at {timestamp} origin={origin_node}")

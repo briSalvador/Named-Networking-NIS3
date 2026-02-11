@@ -48,6 +48,15 @@ class NetworkStatistics:
                 self.interest_data_pairs[key] = {}
             self.interest_data_pairs[key]['interest_time'] = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
             self.packet_counts['INTEREST'] += 1
+
+    def record_interest_hop(self, origin_node, name, seq_num, node_name):
+        """Append a node to the interest path for the given interest key."""
+        with self.lock:
+            key = (origin_node, name, seq_num)
+            if key not in self.interest_data_pairs:
+                self.interest_data_pairs[key] = {}
+            path = self.interest_data_pairs[key].setdefault('interest_path', [])
+            path.append(node_name)
     
     def record_interest_query(self):
         """Record when an interest query (data_flag=False) is sent to NameServer"""
@@ -71,6 +80,11 @@ class NetworkStatistics:
                 if interest_name == name and interest_seq == seq_num:
                     if 'interest_time' in times:
                         times['data_time'] = timestamp_dt
+
+    def record_data_hop(self, name, seq_num, node_name):
+        """(removed) previously used to append nodes to a separate data path."""
+        # Deprecated: data path tracking removed — keep stub for compatibility.
+        return
 
     
     def record_packet(self, packet_type, size_bits=0, size_bytes=0):
@@ -220,6 +234,10 @@ class PhaseAwareStats:
 
     def record_hop(self):
         return self._active().record_hop()
+
+    def record_interest_hop(self, origin_node, name, seq_num, node_name):
+        return self._active().record_interest_hop(origin_node, name, seq_num, node_name)
+    
 
     # Delegate hello/update so nodes can record these directly
     def record_hello(self):
@@ -565,8 +583,8 @@ if __name__ == "__main__":
     dest = nodes[10]
     interest_name1 = "/ADMU/Gonzaga/cam1/data.txt"
     interest_name2 = "/ADMU/Gonzaga/cam1/info.txt"
-    msg1 = "Hello from acam1"
-    msg2 = "Hello from acam2"
+    msg1 = "Hello from dest1"
+    msg2 = "Hello from dest2"
 
     dest.add_cs(interest_name1, msg1)
     # switch to first-request phase
@@ -1052,6 +1070,17 @@ def print_network_statistics():
         print(f"  Throughput:         {s['throughput_bps']:.3f} bps")
         print(f"  Total Hops:         {s['total_hops']} hops")
         print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
+        # Print paths for completed interest-data pairs in this phase
+        try:
+            st = global_stats.phases.get(p)
+            if st and getattr(st, 'interest_data_pairs', None):
+                for key, info in st.interest_data_pairs.items():
+                    # only show completed pairs
+                    if 'interest_time' in info and 'data_time' in info:
+                        ipath = info.get('interest_path', [])
+                        print(f"  Interest/Data path: {ipath}")
+        except Exception:
+            pass
 
     print("\n" + "="*80)
     print("NETWORK PERFORMANCE STATISTICS (COMBINED)")
