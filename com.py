@@ -34,14 +34,18 @@ class NetworkStatistics:
             'ROUTE_ACK': 0
         }
         self.total_data_bits_transferred = 0
-        self.total_hops = 0
+        self.total_hops = -1    # bandaid *skull emoji*
         self.interest_data_pairs = {}  # {(origin, name, seq): {'interest_time': ts, 'data_time': ts}}
         # start_time is set when the phase actually begins
         self.start_time = None
         self.end_time = None
         # Track payload bits (actual file data) vs control bits (headers/metadata)
         self.payload_bits = 0  # Actual data content
-        self.control_bits = 0  # Headers, metadata, routing info
+        # Split control bits into data-packet header bits and non-data packet bits
+        self.data_control_bits = 0  # header overhead from DATA packets
+        self.non_data_bits = 0     # full bits of non-DATA packets (interest, routing, ack, error, etc.)
+        # Backwards-compatible alias (kept in case other modules reference it)
+        self.control_bits = 0
     
     def record_interest(self, origin_node, name, seq_num, timestamp):
         """Record when an interest packet is sent"""
@@ -79,7 +83,10 @@ class NetworkStatistics:
             name_bytes = len(name.encode('utf-8'))
             header_bits = (6 + name_bytes) * 8
             self.payload_bits += payload_size * 8
-            self.control_bits += header_bits
+            # attribute data_control_bits for DATA packet headers
+            self.data_control_bits += header_bits
+            # keep alias in sync
+            self.control_bits = self.data_control_bits + self.non_data_bits
             
             # Try to find and update matching interest records
             # Data packets may come from any origin, so we search for matching name and seq
@@ -116,11 +123,13 @@ class NetworkStatistics:
                 if packet_name not in ['DATA', 'INTEREST', 'HELLO', 'UPDATE']:
                     self.packet_counts[packet_name] += 1
                 
-                # Track control bits for all non-data packets
+                # Track full bits for non-DATA packets
                 if size_bytes > 0:
-                    self.control_bits += size_bytes * 8
+                    self.non_data_bits += size_bytes * 8
                 elif size_bits > 0:
-                    self.control_bits += size_bits
+                    self.non_data_bits += size_bits
+                # keep alias in sync
+                self.control_bits = self.data_control_bits + self.non_data_bits
 
     def record_hello(self):
         with self.lock:
@@ -162,10 +171,12 @@ class NetworkStatistics:
         throughput_bps = self.total_data_bits_transferred / avg_latency if avg_latency > 0 else 0
         throughput_kbps = throughput_bps / 1000
         
-        # Calculate control overhead: control bits vs payload bits
+        # Calculate control overhead: data-header bits + all non-data packet bits
+        # Control bits = data_control_bits + non_data_bits
+        control_bits_combined = self.data_control_bits + self.non_data_bits
         # Control overhead = control_bits / (control_bits + payload_bits) * 100
-        total_bits = self.control_bits + self.payload_bits
-        control_overhead_percent = (self.control_bits / total_bits * 100) if total_bits > 0 else 0
+        total_bits = control_bits_combined + self.payload_bits
+        control_overhead_percent = (control_bits_combined / total_bits * 100) if total_bits > 0 else 0
         
         # Count control packets (non-data) for reference
         control_packets = (self.packet_counts['ROUTING_DATA'] +
@@ -192,7 +203,10 @@ class NetworkStatistics:
             'control_overhead_percent': control_overhead_percent,
             'completed_pairs': len(latencies),
             'payload_bits': self.payload_bits,
-            'control_bits': self.control_bits
+            # expose combined control bits for compatibility
+            'control_bits': control_bits_combined,
+            'data_control_bits': self.data_control_bits,
+            'non_data_bits': self.non_data_bits
         }
 
 # Global statistics instance
@@ -315,7 +329,9 @@ class PhaseAwareStats:
             'control_overhead_percent': 0,
             'completed_pairs': 0,
             'payload_bits': 0,
-            'control_bits': 0
+            'control_bits': 0,
+            'data_control_bits': 0,
+            'non_data_bits': 0
         }
 
         all_latencies = []
@@ -330,6 +346,8 @@ class PhaseAwareStats:
             combined['control_packets'] += s['control_packets']
             combined['payload_bits'] += s.get('payload_bits', 0)
             combined['control_bits'] += s.get('control_bits', 0)
+            combined['data_control_bits'] += s.get('data_control_bits', 0)
+            combined['non_data_bits'] += s.get('non_data_bits', 0)
             all_latencies.extend(st.calculate_latencies())
             combined['completed_pairs'] += s.get('completed_pairs', 0)
 
@@ -339,6 +357,8 @@ class PhaseAwareStats:
         # Use average latency for throughput (measures actual data transfer time, not total elapsed time)
         combined['throughput_bps'] = combined['total_data_bits'] / (combined['avg_latency_ms'] / 1000) if combined['avg_latency_ms'] > 0 else 0
         combined['throughput_kbps'] = combined['throughput_bps'] / 1000
+        # Recompute control_bits as the sum of data headers + non-data packet bits
+        combined['control_bits'] = combined.get('data_control_bits', 0) + combined.get('non_data_bits', 0)
         # Calculate control overhead using bits: control_bits / (control_bits + payload_bits)
         total_bits_combined = combined['control_bits'] + combined['payload_bits']
         combined['control_overhead_percent'] = (combined['control_bits'] / total_bits_combined * 100) if total_bits_combined > 0 else 0
@@ -535,11 +555,13 @@ if __name__ == "__main__":
     # 19 = up_ns
     
     orig = nodes[3]
-    dest = nodes[5]
-    interest_name1 = "/DLSU/Miguel/data.txt"
-    interest_name2 = "/DLSU/Miguel/info.txt"
-    msg1 = "Hello from dest1"
-    msg2 = "Hello from dest2"
+    dest = nodes[10]
+    interest_name1 = "/ADMU/Gonzaga/cam1/data.txt"
+    interest_name2 = "/ADMU/Gonzaga/cam1/info.txt"
+    msg1 = "Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest "
+    msg2 = "Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest "
+    # msg1 = "Helo from dest "
+    # msg2 = "Hola from dest "
 
     dest.add_cs(interest_name1, msg1)
     # switch to first-request phase
@@ -1021,11 +1043,13 @@ def print_network_statistics():
         print(f"  ROUTE_ACK:          {s['packet_counts'].get('ROUTE_ACK', 0)}")
         print(f"  ERROR:              {s['packet_counts'].get('ERROR', 0)}")
         payload_bits = s.get('payload_bits', 0)
-        control_bits = s.get('control_bits', 0)
+        data_control_bits = s.get('data_control_bits', 0)
+        non_data_bits = s.get('non_data_bits', 0)
+        control_bits = data_control_bits + non_data_bits
         total_bits = payload_bits + control_bits
-        print(f"  Control Bits:          {control_bits}/{total_bits} ({s['control_overhead_percent']:.2f}% overhead)")
+        print(f"  Control Bits :      {control_bits}/{total_bits} ({s['control_overhead_percent']:.2f}% overhead)")
         print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
-        print(f"  Throughput:         {s['throughput_bps']:.3f} bps")
+        print(f"  Throughput:         {s['throughput_kbps']:.3f} Kbps")
         print(f"  Total Hops:         {s['total_hops']} hops")
         print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
         # Print paths for completed interest-data pairs in this phase
@@ -1052,7 +1076,7 @@ def print_network_statistics():
 
     print("\n[THROUGHPUT METRICS]")
     print(f"  Total Data Transmitted: {combined['total_data_bits']} bits ({combined['total_data_bits']/8:.1f} bytes)")
-    print(f"  Throughput:             {combined['throughput_bps']:.2f} bps ({combined['throughput_kbps']:.3f} kbps)")
+    print(f"  Throughput:             {combined['throughput_kbps']:.3f} Kbps")
     print(f"  Test Duration:          {combined['total_time']:.3f} seconds")
 
     print("\n[PACKET TRANSMISSION OVERHEAD]")
@@ -1068,7 +1092,9 @@ def print_network_statistics():
 
     print("\n[CONTROL OVERHEAD]")
     print(f"  Control Packets:        {combined['control_packets']} packets")
-    print(f"  Control Overhead:       {combined['control_overhead_percent']:.2f}%")
+    print(f"  Control Bits (non-payload): {combined.get('control_bits', 0)}/{combined.get('payload_bits', 0) + combined.get('control_bits', 0)} ({combined['control_overhead_percent']:.2f}% overhead)")
+    print(f"    - Data header bits:      {combined.get('data_control_bits', 0)} bits")
+    print(f"    - Non-DATA packet bits:  {combined.get('non_data_bits', 0)} bits")
     print(f"  Data Packet Ratio:      {100 - combined['control_overhead_percent']:.2f}%")
 
     print("\n[ROUTING HOPS]")

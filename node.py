@@ -1268,7 +1268,7 @@ class Node:
         payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
         max_payload_per_packet = FRAGMENT_SIZE - (6 + len(name.encode("utf-8")))  # header + name
         # cap to 1-byte payload field
-        chunk_size = min(max_payload_per_packet, 255)
+        chunk_size = min(max_payload_per_packet, 1500)
 
         total_fragments = (len(payload_bytes) + chunk_size - 1) // chunk_size
 
