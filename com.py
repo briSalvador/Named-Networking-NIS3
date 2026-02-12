@@ -143,8 +143,9 @@ class NetworkStatistics:
         max_latency = max(latencies) if latencies else 0
         min_latency = min(latencies) if latencies else 0
         
-        # Calculate throughput in bits per second
-        throughput_bps = self.total_data_bits_transferred / total_time if total_time > 0 else 0
+        # Calculate throughput in bits per second using average latency (actual data transfer time)
+        # This is more accurate for single-request scenarios as it excludes waiting/setup time
+        throughput_bps = self.total_data_bits_transferred / avg_latency if avg_latency > 0 else 0
         throughput_kbps = throughput_bps / 1000
         
         # Count control packets (non-data)
@@ -311,6 +312,7 @@ class PhaseAwareStats:
         combined['avg_latency_ms'] = (sum(all_latencies) / len(all_latencies) * 1000) if all_latencies else 0
         combined['max_latency_ms'] = (max(all_latencies) * 1000) if all_latencies else 0
         combined['min_latency_ms'] = (min(all_latencies) * 1000) if all_latencies else 0
+        # Use average latency for throughput (measures actual data transfer time, not total elapsed time)
         combined['throughput_bps'] = combined['total_data_bits'] / (combined['avg_latency_ms'] / 1000) if combined['avg_latency_ms'] > 0 else 0
         combined['throughput_kbps'] = combined['throughput_bps'] / 1000
         combined['control_overhead_percent'] = (combined['control_packets'] / combined['total_packets'] * 100) if combined['total_packets'] > 0 else 0
