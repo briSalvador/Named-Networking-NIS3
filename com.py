@@ -34,7 +34,7 @@ class NetworkStatistics:
             'ROUTE_ACK': 0
         }
         self.total_data_bits_transferred = 0
-        self.total_hops = -1    # bandaid *skull emoji*
+        self.total_hops = 0    # bandaid *skull emoji*
         self.interest_data_pairs = {}  # {(origin, name, seq): {'interest_time': ts, 'data_time': ts}}
         # start_time is set when the phase actually begins
         self.start_time = None
@@ -554,10 +554,10 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[3]
-    dest = nodes[10]
-    interest_name1 = "/ADMU/Gonzaga/cam1/data.txt"
-    interest_name2 = "/ADMU/Gonzaga/cam1/info.txt"
+    orig = nodes[2]
+    dest = nodes[5]
+    interest_name1 = "/DLSU/Miguel/data.txt"
+    interest_name2 = "/DLSU/Miguel/info.txt"
     msg1 = "Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest "
     msg2 = "Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest "
     # msg1 = "Helo from dest "
@@ -566,7 +566,7 @@ if __name__ == "__main__":
     dest.add_cs(interest_name1, msg1)
     # switch to first-request phase
     try:
-        global_stats.set_phase("first_request")
+        global_stats.set_phase("request1")
     except Exception:
         pass
     send_interest_via_ns(orig, seq_num=0, name=interest_name1, data_flag=False)
@@ -587,7 +587,7 @@ if __name__ == "__main__":
 
     # switch to second-request phase
     try:
-        global_stats.set_phase("second_request")
+        global_stats.set_phase("request2")
     except Exception:
         pass
     send_interest_via_ns(orig, seq_num=0, name=interest_name2, data_flag=False)
@@ -1050,7 +1050,10 @@ def print_network_statistics():
         print(f"  Control Bits :      {control_bits}/{total_bits} ({s['control_overhead_percent']:.2f}% overhead)")
         print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
         print(f"  Throughput:         {s['throughput_kbps']:.3f} Kbps")
-        print(f"  Total Hops:         {s['total_hops']} hops")
+        if s['total_hops']==0:
+            print(f"  Total Hops:         0 hops")
+        else:
+            print(f"  Total Hops:         {s['total_hops']-1} hops")
         print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
         # Print paths for completed interest-data pairs in this phase
         try:
