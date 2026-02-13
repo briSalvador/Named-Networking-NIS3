@@ -3282,14 +3282,15 @@ class Node:
         return base_dist + extra_penalty
 
     def check_tables(self, name):
-        # 1. CS: Exact match or Levenshtein <= 3
+        # 1. CS: Exact match only (Levenshtein fuzzy matching disabled to avoid false positives)
         for key in self.cs.keys():
             if name == key:
                 return "CS", self.cs[key]
-        for key in self.cs.keys():
-            score = self.levenshtein_distance(name, key)
-            if score <= 3:
-                return "CS", self.cs[key]
+        # Fuzzy matching disabled - was causing issues with similar filenames (0001.txt vs 0002.txt)
+        # for key in self.cs.keys():
+        #     score = self.levenshtein_distance(name, key)
+        #     if score <= 3:
+        #         return "CS", self.cs[key]
 
         # 2. PIT: Exact match only
         for key in self.pit.keys():

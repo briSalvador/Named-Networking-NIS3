@@ -372,6 +372,9 @@ global_stats = PhaseAwareStats()
 # Export for other modules
 __all__ = ['global_stats', 'NetworkStatistics', 'DebugController']
 
+# Configure the number of requests to run
+r_count = 1
+
 if __name__ == "__main__":
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
     admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="ADMU_NameServer1_topology.txt")
@@ -556,49 +559,42 @@ if __name__ == "__main__":
     
     orig = nodes[2]
     dest = nodes[5]
-    interest_name1 = "/DLSU/Miguel/data.txt"
-    interest_name2 = "/DLSU/Miguel/info.txt"
-    msg1 = "Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest Helo from dest "
-    msg2 = "Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest Hola from dest "
-    # msg1 = "Helo from dest "
-    # msg2 = "Hola from dest "
 
-    dest.add_cs(interest_name1, msg1)
-    # switch to first-request phase
-    try:
-        global_stats.set_phase("request1")
-    except Exception:
-        pass
-    send_interest_via_ns(orig, seq_num=0, name=interest_name1, data_flag=False)
+    # Configure the number of requests to run
+    r_count = 50
+
+    # Dynamically create interest files and messages based on r_count
+    interest_files = {}
+    messages = {}
     
-    # Wait until node has received the data packet
-    max_wait_time = 10  # seconds
-    start_time = time.time()
-    while not orig.has_received_data(interest_name1):
-        if time.time() - start_time > max_wait_time:
-            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name1}")
-            break
-        time.sleep(0.001)
+    for i in range(1, r_count + 1):
+        digit_str = str(i).zfill(4) 
+        interest_files[i] = f"/DLSU/Miguel/file{digit_str}.txt"
+        messages[i] = f"Hi from dst{digit_str}" * 10  # repeat 10 times
 
-    dest.add_cs(interest_name2, msg2)
+    # Send requests dynamically based on r_count
+    for i in range(1, r_count + 1):
+        dest.add_cs(interest_files[i], messages[i])
 
-    # Reset the received data status before sending again
-    orig.reset_received_data(interest_name2)
+        # Reset the received data status before sending each request
+        orig.reset_received_data(interest_files[i])
 
-    # switch to second-request phase
-    try:
-        global_stats.set_phase("request2")
-    except Exception:
-        pass
-    send_interest_via_ns(orig, seq_num=0, name=interest_name2, data_flag=False)
-
-    max_wait_time = 10  # seconds
-    start_time = time.time()
-    while not orig.has_received_data(interest_name2):
-        if time.time() - start_time > max_wait_time:
-            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_name2}")
-            break
-        time.sleep(0.001)
+        # switch to current request phase
+        try:
+            global_stats.set_phase(f"request{i}")
+        except Exception:
+            pass
+        
+        send_interest_via_ns(orig, seq_num=0, name=interest_files[i], data_flag=False)
+        
+        # Wait until node has received the data packet
+        max_wait_time = 10  # seconds
+        start_time = time.time()
+        while not orig.has_received_data(interest_files[i]):
+            if time.time() - start_time > max_wait_time:
+                print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[i]}")
+                break
+            time.sleep(0.001)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
@@ -1017,10 +1013,11 @@ def nameserver_debug_menu(ns):
 controller = DebugController(nodes)
 
 def print_network_statistics():
+    global r_count
     """Print comprehensive network statistics"""
     # finalize and collect per-phase stats
     global_stats.finalize()
-    phases = ["initialization", "first_request", "second_request"]
+    phases = ["initialization"] + [f"request{i}" for i in range(1, r_count + 1)]
     phase_stats = {p: global_stats.get_statistics(p) for p in phases}
     combined = global_stats.get_statistics()
 
