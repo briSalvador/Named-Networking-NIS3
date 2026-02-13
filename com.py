@@ -301,6 +301,9 @@ class PhaseAwareStats:
 
     def calculate_latencies(self, phase=None):
         if phase:
+            if phase not in self.phases:
+                # no records for that phase
+                return []
             return self.phases[phase].calculate_latencies()
         # aggregate
         latencies = []
@@ -311,6 +314,9 @@ class PhaseAwareStats:
     def get_statistics(self, phase=None):
         # If a specific phase requested, return that phase's stats
         if phase:
+            # if the requested phase doesn't exist (e.g. auto_run shorter than request_count), create an empty phase
+            if phase not in self.phases:
+                self.phases[phase] = NetworkStatistics()
             return self.phases[phase].get_statistics()
 
         # Otherwise return combined stats across all phases
@@ -534,6 +540,82 @@ if __name__ == "__main__":
 
         origin_node.send_interest(seq_num=seq_num, name=name, target=target, data_flag=data_flag)
 
+    def manual_run(orig, dest, gs, loc_name, r_count): 
+        interest_files = {}
+        messages = {}
+        
+        for i in range(1, r_count + 1):
+            digit_str = str(i).zfill(5) 
+            interest_files[i] = f"/{loc_name}/file{digit_str}.txt"
+            messages[i] = f"Hifromdst{digit_str} " * 10  # repeat 10 times
+
+        # Send requests dynamically based on r_count
+        for i in range(1, r_count + 1):
+            dest.add_cs(interest_files[i], messages[i])
+
+            # Reset the received data status before sending each request
+            orig.reset_received_data(interest_files[i])
+
+            # switch to current request phase
+            try:
+                gs.set_phase(f"request{i}")
+            except Exception:
+                pass
+            
+            send_interest_via_ns(orig, seq_num=0, name=interest_files[i], data_flag=False)
+            
+            # Wait until node has received the data packet
+            max_wait_time = 10  # seconds
+            start_time = time.time()
+            while not orig.has_received_data(interest_files[i]):
+                if time.time() - start_time > max_wait_time:
+                    print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[i]}")
+                    break
+                time.sleep(0.001)
+
+    def auto_run(orig, dest, gs, loc_name, r_time, delay):
+        curr_req_timer = time.time()
+        ctr = 1
+        interest_files = {}
+        messages = {}
+        max_wait_time = 10  # seconds
+
+        while time.time() - curr_req_timer < float(r_time):
+            digit_str = str(ctr).zfill(5)
+            interest_files[ctr] = f"/{loc_name}/file{digit_str}.txt"
+            messages[ctr] = f"Hifromdst{digit_str} " * 10
+
+            try:
+                dest.add_cs(interest_files[ctr], messages[ctr])
+            except Exception:
+                pass
+
+            try:
+                orig.reset_received_data(interest_files[ctr])
+            except Exception:
+                pass
+
+            try:
+                gs.set_phase(f"request{ctr}")
+            except Exception:
+                pass
+
+            try:
+                send_interest_via_ns(orig, seq_num=0, name=interest_files[ctr], data_flag=False)
+                start_time = time.time()
+                while not orig.has_received_data(interest_files[ctr]):
+                    if time.time() - start_time > max_wait_time:
+                        print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[ctr]}")
+                        break
+                    time.sleep(0.001)
+            except Exception:
+                pass
+
+            # delay between requests
+            time.sleep(float(delay))
+            ctr += 1
+        return ctr-1
+
     # TEST CASE
 
     # 0 = dpc1
@@ -557,44 +639,19 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    orig = nodes[2]
-    dest = nodes[5]
+    original = nodes[2]
+    destination = nodes[5]
+    location_name = "DLSU/Miguel"
 
     # Configure the number of requests to run
-    r_count = 50
-
-    # Dynamically create interest files and messages based on r_count
-    interest_files = {}
-    messages = {}
+    request_count = 30
     
-    for i in range(1, r_count + 1):
-        digit_str = str(i).zfill(4) 
-        interest_files[i] = f"/DLSU/Miguel/file{digit_str}.txt"
-        messages[i] = f"Hi from dst{digit_str}" * 10  # repeat 10 times
+    # Configure the how long the program will run
+    request_time = 10
+    request_delay = 0.01
 
-    # Send requests dynamically based on r_count
-    for i in range(1, r_count + 1):
-        dest.add_cs(interest_files[i], messages[i])
-
-        # Reset the received data status before sending each request
-        orig.reset_received_data(interest_files[i])
-
-        # switch to current request phase
-        try:
-            global_stats.set_phase(f"request{i}")
-        except Exception:
-            pass
-        
-        send_interest_via_ns(orig, seq_num=0, name=interest_files[i], data_flag=False)
-        
-        # Wait until node has received the data packet
-        max_wait_time = 10  # seconds
-        start_time = time.time()
-        while not orig.has_received_data(interest_files[i]):
-            if time.time() - start_time > max_wait_time:
-                print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[i]}")
-                break
-            time.sleep(0.001)
+    # manual_run(original, destination, global_stats, location_name, request_count)
+    request_count = auto_run(original, destination, global_stats, location_name, request_time, request_delay)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
@@ -1017,7 +1074,7 @@ def print_network_statistics():
     """Print comprehensive network statistics"""
     # finalize and collect per-phase stats
     global_stats.finalize()
-    phases = ["initialization"] + [f"request{i}" for i in range(1, r_count + 1)]
+    phases = ["initialization"] + [f"request{i}" for i in range(1, request_count + 1)]
     phase_stats = {p: global_stats.get_statistics(p) for p in phases}
     combined = global_stats.get_statistics()
 
