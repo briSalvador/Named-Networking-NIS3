@@ -547,7 +547,7 @@ if __name__ == "__main__":
         for i in range(1, r_count + 1):
             digit_str = str(i).zfill(5) 
             interest_files[i] = f"/{loc_name}/file{digit_str}.txt"
-            messages[i] = f"Hifromdst{digit_str} " * 10  # repeat 10 times
+            messages[i] = f"Hifromdst{digit_str} " * 9
 
         # Send requests dynamically based on r_count
         for i in range(1, r_count + 1):
@@ -573,7 +573,7 @@ if __name__ == "__main__":
                     break
                 time.sleep(0.001)
 
-    def auto_run(orig, dest, gs, loc_name, r_time, delay):
+    def auto_run(orig, dest, gs, loc_name, r_time):
         curr_req_timer = time.time()
         ctr = 1
         interest_files = {}
@@ -583,7 +583,7 @@ if __name__ == "__main__":
         while time.time() - curr_req_timer < float(r_time):
             digit_str = str(ctr).zfill(5)
             interest_files[ctr] = f"/{loc_name}/file{digit_str}.txt"
-            messages[ctr] = f"Hifromdst{digit_str} " * 10
+            messages[ctr] = f"Hifromdst{digit_str} " * 9
 
             try:
                 dest.add_cs(interest_files[ctr], messages[ctr])
@@ -610,10 +610,9 @@ if __name__ == "__main__":
                     time.sleep(0.001)
             except Exception:
                 pass
-
-            # delay between requests
-            time.sleep(float(delay))
+            
             ctr += 1
+
         return ctr-1
 
     # TEST CASE
@@ -639,19 +638,18 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[2]
-    destination = nodes[5]
-    location_name = "DLSU/Miguel"
+    original = nodes[3]
+    destination = nodes[7]
+    location_name = destination.name
 
     # Configure the number of requests to run
     request_count = 30
     
     # Configure the how long the program will run
-    request_time = 10
-    request_delay = 0.01
+    request_time = 1
 
     # manual_run(original, destination, global_stats, location_name, request_count)
-    request_count = auto_run(original, destination, global_stats, location_name, request_time, request_delay)
+    request_count = auto_run(original, destination, global_stats, location_name, request_time)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
@@ -1133,7 +1131,7 @@ def print_network_statistics():
 
     print("\n[THROUGHPUT METRICS]")
     print(f"  Total Data Transmitted: {combined['total_data_bits']} bits ({combined['total_data_bits']/8:.1f} bytes)")
-    print(f"  Throughput:             {combined['throughput_kbps']:.3f} Kbps")
+    print(f"  Throughput:             {((combined['total_data_bits']/combined['avg_latency_ms'])/combined['completed_pairs']):.3f} Kbps")
     print(f"  Test Duration:          {combined['total_time']:.3f} seconds")
 
     print("\n[PACKET TRANSMISSION OVERHEAD]")
@@ -1149,9 +1147,9 @@ def print_network_statistics():
 
     print("\n[CONTROL OVERHEAD]")
     print(f"  Control Packets:        {combined['control_packets']} packets")
-    print(f"  Control Bits (non-payload): {combined.get('control_bits', 0)}/{combined.get('payload_bits', 0) + combined.get('control_bits', 0)} ({combined['control_overhead_percent']:.2f}% overhead)")
-    print(f"    - Data header bits:      {combined.get('data_control_bits', 0)} bits")
-    print(f"    - Non-DATA packet bits:  {combined.get('non_data_bits', 0)} bits")
+    print(f"  Control Bits:           {combined.get('control_bits', 0)}/{combined.get('payload_bits', 0) + combined.get('control_bits', 0)} ({combined['control_overhead_percent']:.2f}% overhead)")
+    print(f"   - Data header bits:    {combined.get('data_control_bits', 0)} bits")
+    print(f"   - Non-DATA packet bits:{combined.get('non_data_bits', 0)} bits")
     print(f"  Data Packet Ratio:      {100 - combined['control_overhead_percent']:.2f}%")
 
     print("\n[ROUTING HOPS]")
