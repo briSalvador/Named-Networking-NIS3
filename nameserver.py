@@ -980,8 +980,19 @@ class NameServer:
         my_top = _top_domain(self.ns_name)
         target_top = _top_domain(dest_node)
 
+        # Check if ANY domain part of dest_node (supporting multi-name nodes) matches local domain
+        # For example: "/DLSU/Router1 /ADMU/Router1" should check both DLSU and ADMU
+        target_domains = []
+        for part in dest_node.split():
+            top = _top_domain(part)
+            if top:
+                target_domains.append(top)
+        
+        # If ANY target domain is local, treat as local request (do not ENCAP forward)
+        is_local_domain = any(d == my_top for d in target_domains) if target_domains else False
+
         # If the request is for a name outside this NS domain, attempt to forward to a border router
-        if target_top and my_top and target_top != my_top:
+        if not is_local_domain and target_top and my_top and target_top != my_top:
             # find candidate border routers (nodes whose any alias has the target top domain)
             border_candidates = []
             for node in self.graph.keys():

@@ -3,6 +3,7 @@ from nameserver import NameServer
 import time
 import threading
 import queue
+import random
 from datetime import datetime
 
 # Packet Types (4 bits)
@@ -546,8 +547,8 @@ if __name__ == "__main__":
         
         for i in range(1, r_count + 1):
             digit_str = str(i).zfill(5) 
-            interest_files[i] = f"/{loc_name}/file{digit_str}.txt"
-            messages[i] = f"Hifromdst{digit_str} " * 9
+            interest_files[i] = f"{loc_name}/file{digit_str}.txt"
+            messages[i] = f"Hifromdst{digit_str} " * 10
 
         # Send requests dynamically based on r_count
         for i in range(1, r_count + 1):
@@ -573,45 +574,87 @@ if __name__ == "__main__":
                     break
                 time.sleep(0.001)
 
-    def auto_run(orig, dest, gs, loc_name, r_time):
+    def auto_run(orig, dest, gs, loc_name, r_time, rand):
         curr_req_timer = time.time()
         ctr = 1
         interest_files = {}
         messages = {}
         max_wait_time = 10  # seconds
 
-        while time.time() - curr_req_timer < float(r_time):
-            digit_str = str(ctr).zfill(5)
-            interest_files[ctr] = f"/{loc_name}/file{digit_str}.txt"
-            messages[ctr] = f"Hifromdst{digit_str} " * 9
+        if rand:
+            while time.time() - curr_req_timer < float(r_time):
+                orig_int, dest_int = random.sample(range(17), 2)
+                orig = nodes[orig_int]
+                dest = nodes[dest_int]
+                loc_name = dest.name
+                
+                digit_str = str(ctr).zfill(5)
+                interest_files[ctr] = f"{loc_name}/file{digit_str}.txt"
+                messages[ctr] = f"Hifromdst{digit_str} " * 10
 
-            try:
-                dest.add_cs(interest_files[ctr], messages[ctr])
-            except Exception:
-                pass
+                try:
+                    dest.add_cs(interest_files[ctr], messages[ctr])
+                except Exception:
+                    pass
 
-            try:
-                orig.reset_received_data(interest_files[ctr])
-            except Exception:
-                pass
+                try:
+                    orig.reset_received_data(interest_files[ctr])
+                except Exception:
+                    pass
 
-            try:
-                gs.set_phase(f"request{ctr}")
-            except Exception:
-                pass
+                try:
+                    gs.set_phase(f"request{ctr}")
+                except Exception:
+                    pass
 
-            try:
-                send_interest_via_ns(orig, seq_num=0, name=interest_files[ctr], data_flag=False)
-                start_time = time.time()
-                while not orig.has_received_data(interest_files[ctr]):
-                    if time.time() - start_time > max_wait_time:
-                        print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[ctr]}")
-                        break
-                    time.sleep(0.001)
-            except Exception:
-                pass
-            
-            ctr += 1
+                try:
+                    send_interest_via_ns(orig, seq_num=0, name=interest_files[ctr], data_flag=False)
+                    start_time = time.time()
+                    while not orig.has_received_data(interest_files[ctr]):
+                        if time.time() - start_time > max_wait_time:
+                            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[ctr]}")
+                            break
+                        time.sleep(0.001)
+                except Exception:
+                    pass
+                
+                ctr += 1
+                time.sleep(0.1)
+
+        else:
+            while time.time() - curr_req_timer < float(r_time):
+                digit_str = str(ctr).zfill(5)
+                
+                interest_files[ctr] = f"{loc_name}/file{digit_str}.txt"
+                messages[ctr] = f"Hifromdst{digit_str} " * 10
+
+                try:
+                    dest.add_cs(interest_files[ctr], messages[ctr])
+                except Exception:
+                    pass
+
+                try:
+                    orig.reset_received_data(interest_files[ctr])
+                except Exception:
+                    pass
+
+                try:
+                    gs.set_phase(f"request{ctr}")
+                except Exception:
+                    pass
+
+                try:
+                    send_interest_via_ns(orig, seq_num=0, name=interest_files[ctr], data_flag=False)
+                    start_time = time.time()
+                    while not orig.has_received_data(interest_files[ctr]):
+                        if time.time() - start_time > max_wait_time:
+                            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[ctr]}")
+                            break
+                        time.sleep(0.001)
+                except Exception:
+                    pass
+                
+                ctr += 1
 
         return ctr-1
 
@@ -638,18 +681,19 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[3]
-    destination = nodes[7]
+    original = nodes[16]
+    destination = nodes[0]
     location_name = destination.name
+    runtime_rand = True  # configure if origin and nodes should be random
 
     # Configure the number of requests to run
-    request_count = 30
+    request_count = 5
     
     # Configure the how long the program will run
     request_time = 1
 
-    # manual_run(original, destination, global_stats, location_name, request_count)
-    request_count = auto_run(original, destination, global_stats, location_name, request_time)
+    manual_run(original, destination, global_stats, location_name, request_count)
+    # request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
