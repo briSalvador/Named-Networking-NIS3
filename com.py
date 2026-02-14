@@ -49,6 +49,8 @@ class NetworkStatistics:
         self.non_data_bits = 0     # full bits of non-DATA packets (interest, routing, ack, error, etc.)
         # Backwards-compatible alias (kept in case other modules reference it)
         self.control_bits = 0
+        # Configuration flag: whether to include HELLO/UPDATE bits in control overhead
+        self.include_hello_update_in_control_overhead = False
     
     def record_interest(self, origin_node, name, seq_num, timestamp):
         """Record when an interest packet is sent"""
@@ -128,12 +130,23 @@ class NetworkStatistics:
                     self.packet_counts[packet_name] += 1
                 
                 # Track full bits for non-DATA packets
-                if size_bytes > 0:
-                    self.non_data_bits += size_bytes * 8
-                elif size_bits > 0:
-                    self.non_data_bits += size_bits
+                # Skip HELLO/UPDATE bits if configured to exclude them from control overhead
+                should_count_bits = True
+                if packet_name in ['HELLO', 'UPDATE'] and not self.include_hello_update_in_control_overhead:
+                    should_count_bits = False
+                
+                if should_count_bits:
+                    if size_bytes > 0:
+                        self.non_data_bits += size_bytes * 8
+                    elif size_bits > 0:
+                        self.non_data_bits += size_bits
                 # keep alias in sync
                 self.control_bits = self.data_control_bits + self.non_data_bits
+    
+    def set_include_hello_update_in_overhead(self, include=True):
+        """Enable/disable HELLO and UPDATE packet bits from control overhead calculation"""
+        with self.lock:
+            self.include_hello_update_in_control_overhead = include
 
     def record_hello(self):
         with self.lock:
@@ -285,6 +298,10 @@ class PhaseAwareStats:
 
     def record_update(self):
         return self._active().record_update()
+
+    def set_include_hello_update_in_overhead(self, include=True):
+        """Enable/disable HELLO and UPDATE packet bits from control overhead calculation"""
+        return self._active().set_include_hello_update_in_overhead(include)
 
     def finalize(self):
         for st in self.phases.values():
@@ -623,7 +640,6 @@ if __name__ == "__main__":
                     pass
                 
                 ctr += 1
-                time.sleep(0.1)
 
         else:
             while time.time() - curr_req_timer < float(r_time):
@@ -685,8 +701,8 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[12]
-    destination = nodes[7]
+    original = nodes[3]
+    destination = nodes[5]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
@@ -694,10 +710,10 @@ if __name__ == "__main__":
     request_count = 1
     
     # Configure the how long the program will run
-    request_time = 10
+    request_time = 60
 
-    manual_run(original, destination, global_stats, location_name, request_count)
-    # request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
+    # manual_run(original, destination, global_stats, location_name, request_count)
+    request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
