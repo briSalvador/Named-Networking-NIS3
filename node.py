@@ -3281,13 +3281,13 @@ class Node:
             
             if alt_ns_port:
                 # Send a new INTEREST (QUERY) to the alternate NameServer
-                # with data_flag=True to indicate this is a real interest that needs data
+                # with data_flag=False to first query for routing information
                 interest_pkt = create_interest_packet(
                     seq_num=seq_num,
                     name=dest_name,
                     flags=0x0,
                     origin_node=self.name,
-                    data_flag=True,
+                    data_flag=False,
                     visited_domains=[]
                 )
                 try:

@@ -682,7 +682,7 @@ if __name__ == "__main__":
     # 19 = up_ns
     
     original = nodes[12]
-    destination = nodes[10]
+    destination = nodes[7]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
