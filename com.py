@@ -681,8 +681,8 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[12]
-    destination = nodes[7]
+    original = nodes[16]
+    destination = nodes[12]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
@@ -690,7 +690,7 @@ if __name__ == "__main__":
     request_count = 1
     
     # Configure the how long the program will run
-    request_time = 1
+    request_time = 10
 
     manual_run(original, destination, global_stats, location_name, request_count)
     # request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
@@ -1143,7 +1143,10 @@ def print_network_statistics():
         non_data_bits = s.get('non_data_bits', 0)
         control_bits = data_control_bits + non_data_bits
         total_bits = payload_bits + control_bits
-        print(f"  Control Bits :      {control_bits}/{total_bits} ({s['control_overhead_percent']:.2f}% overhead)")
+        if total_bits > 0:
+            print(f"  Control Bits :      {control_bits}/{total_bits} ({s['control_overhead_percent']:.2f}% overhead)")
+        else:
+            print(f"  Control Bits :      0/0 (0.00% overhead)")
         print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
         print(f"  Throughput:         {s['throughput_kbps']:.3f} Kbps")
         if s['total_hops']==0:
@@ -1191,7 +1194,11 @@ def print_network_statistics():
 
     print("\n[CONTROL OVERHEAD]")
     print(f"  Control Packets:        {combined['control_packets']} packets")
-    print(f"  Control Bits:           {combined.get('control_bits', 0)}/{combined.get('payload_bits', 0) + combined.get('control_bits', 0)} ({combined['control_overhead_percent']:.2f}% overhead)")
+    total_bits_combined = combined.get('payload_bits', 0) + combined.get('control_bits', 0)
+    if total_bits_combined > 0:
+        print(f"  Control Bits:           {combined.get('control_bits', 0)}/{total_bits_combined} ({combined['control_overhead_percent']:.2f}% overhead)")
+    else:
+        print(f"  Control Bits:           0/0 (0.00% overhead)")
     print(f"   - Data header bits:    {combined.get('data_control_bits', 0)} bits")
     print(f"   - Non-DATA packet bits:{combined.get('non_data_bits', 0)} bits")
     print(f"  Data Packet Ratio:      {100 - combined['control_overhead_percent']:.2f}%")
