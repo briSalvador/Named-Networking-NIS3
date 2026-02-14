@@ -14,6 +14,7 @@ HELLO = 0x4
 UPDATE = 0x5
 ERROR = 0x6
 ROUTE_ACK = 0x7
+REDIRECT_NS = 0x8
 
 # Flag Masks (lower 4 bits)
 ACK_FLAG = 0x1
@@ -32,7 +33,8 @@ class NetworkStatistics:
             'HELLO': 0,
             'UPDATE': 0,
             'ERROR': 0,
-            'ROUTE_ACK': 0
+            'ROUTE_ACK': 0,
+            'REDIRECT_NS': 0
         }
         self.total_data_bits_transferred = 0
         self.total_hops = 0    # bandaid *skull emoji*
@@ -116,7 +118,8 @@ class NetworkStatistics:
                 HELLO: 'HELLO',
                 UPDATE: 'UPDATE',
                 ERROR: 'ERROR',
-                ROUTE_ACK: 'ROUTE_ACK'
+                ROUTE_ACK: 'ROUTE_ACK',
+                REDIRECT_NS: 'REDIRECT_NS'
             }
             if packet_type in packet_names:
                 packet_name = packet_names[packet_type]
@@ -185,7 +188,8 @@ class NetworkStatistics:
                           self.packet_counts['HELLO'] + 
                           self.packet_counts['UPDATE'] + 
                           self.packet_counts['ROUTE_ACK'] +
-                          self.packet_counts['INTEREST_QUERY'])
+                          self.packet_counts['INTEREST_QUERY'] +
+                          self.packet_counts['REDIRECT_NS'])
         
         total_packets = sum(self.packet_counts.values())
         
@@ -681,8 +685,8 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[16]
-    destination = nodes[12]
+    original = nodes[12]
+    destination = nodes[7]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
@@ -1138,6 +1142,7 @@ def print_network_statistics():
         print(f"  ROUTING_DATA:       {s['packet_counts'].get('ROUTING_DATA', 0)}")
         print(f"  ROUTE_ACK:          {s['packet_counts'].get('ROUTE_ACK', 0)}")
         print(f"  ERROR:              {s['packet_counts'].get('ERROR', 0)}")
+        print(f"  REDIRECT_NS:        {s['packet_counts'].get('REDIRECT_NS', 0)}")
         payload_bits = s.get('payload_bits', 0)
         data_control_bits = s.get('data_control_bits', 0)
         non_data_bits = s.get('non_data_bits', 0)
@@ -1191,6 +1196,8 @@ def print_network_statistics():
     print(f"    - UPDATE packets:     {combined['packet_counts'].get('UPDATE', 0)}")
     print(f"    - ERROR packets:      {combined['packet_counts'].get('ERROR', 0)}")
     print(f"    - ROUTE_ACK packets:  {combined['packet_counts'].get('ROUTE_ACK', 0)}")
+    print(f"    - REDIRECT_NS packets:{combined['packet_counts'].get('REDIRECT_NS', 0)}")
+
 
     print("\n[CONTROL OVERHEAD]")
     print(f"  Control Packets:        {combined['control_packets']} packets")

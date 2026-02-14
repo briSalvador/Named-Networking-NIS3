@@ -1130,6 +1130,7 @@ class NameServer:
                         redirect_pkt = create_redirect_ns_packet(seq_num=seq_num, dest_name=dest_name, alt_ns_name=alt_ns)
                         try:
                             self.sock.sendto(redirect_pkt, addr)
+                            self._record_packet_stat(redirect_pkt)
                             return
                         except Exception as e:
                             print(f"[{self.ns_name}] Failed to send REDIRECT_NS to {addr}: {e}")
