@@ -43,6 +43,7 @@ HELLO = 0x4
 UPDATE = 0x5
 ERROR = 0x6
 ROUTE_ACK = 0x7
+REDIRECT_NS = 0x8
 
 # Flag Masks (lower 4 bits)
 ACK_FLAG = 0x1
@@ -627,6 +628,61 @@ def get_domains_from_name(node_name):
         if len(segments) > 1 and segments[1]:
             domains.append(segments[1])
     return domains
+
+def create_redirect_ns_packet(seq_num, dest_name, alt_ns_name, flags=0x0):
+    """
+    Create a REDIRECT_NS packet to tell an edge node to query a different NameServer.
+    
+    Format:
+      | packet_type_flags (1B) | seq_num (1B) | alt_ns_length (1B) | dest_name_length (1B) |
+      | alt_ns_name (variable) | dest_name (variable) |
+    """
+    packet_type = REDIRECT_NS
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    seq_num = seq_num & 0xFF
+    
+    alt_ns_bytes = alt_ns_name.encode("utf-8")
+    alt_ns_length = len(alt_ns_bytes) & 0xFF
+    
+    dest_name_bytes = dest_name.encode("utf-8")
+    dest_name_length = len(dest_name_bytes) & 0xFF
+
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, alt_ns_length, dest_name_length)
+    packet = header + alt_ns_bytes + dest_name_bytes
+    return packet
+
+def parse_redirect_ns_packet(packet):
+    """Parse REDIRECT_NS packet sent by NameServer to edge node."""
+    if len(packet) < 4:
+        raise ValueError("Invalid REDIRECT_NS packet: too short")
+    
+    packet_type_flags, seq_num, alt_ns_length, dest_name_length = struct.unpack("!BBBB", packet[:4])
+    
+    alt_ns_start = 4
+    alt_ns_end = alt_ns_start + alt_ns_length
+    if len(packet) < alt_ns_end:
+        raise ValueError("Invalid REDIRECT_NS packet: incomplete alt_ns_name")
+    
+    alt_ns_name = packet[alt_ns_start:alt_ns_end].decode("utf-8")
+    
+    dest_name_start = alt_ns_end
+    dest_name_end = dest_name_start + dest_name_length
+    if len(packet) < dest_name_end:
+        raise ValueError("Invalid REDIRECT_NS packet: incomplete dest_name")
+    
+    dest_name = packet[dest_name_start:dest_name_end].decode("utf-8")
+    
+    packet_type = (packet_type_flags >> 4) & 0xF
+    flags = packet_type_flags & 0xF
+    
+    return {
+        "PacketType": packet_type,
+        "Flags": flags,
+        "SequenceNumber": seq_num,
+        "AlternateNS": alt_ns_name,
+        "DestinationName": dest_name,
+    }
 
 class Node:
     def log(self, message):
@@ -3171,6 +3227,86 @@ class Node:
                         self.record_data_received(parsed["Name"])
                     except Exception:
                         pass
+            return
+
+        elif packet_type == REDIRECT_NS:
+            # Handle REDIRECT_NS packet: tells this edge node to query a different NameServer
+            # BUT: if this is an intermediate node, forward it back through the NS query interfaces
+            try:
+                parsed = parse_redirect_ns_packet(packet)
+            except Exception as e:
+                print(f"[{self.name}] Failed to parse REDIRECT_NS packet: {e}")
+                self.log(f"[{self.name}] Failed to parse REDIRECT_NS packet: {e}")
+                return
+            
+            dest_name = parsed.get("DestinationName")
+            
+            # Check if there are NS query interfaces for this destination
+            # If yes, this is likely an intermediate node - forward it back
+            pending_ifaces = self.ns_query_table.get(dest_name, [])
+            if pending_ifaces:
+                print(f"[{self.name}] Received REDIRECT_NS for {dest_name} - forwarding back (intermediate node)")
+                self.log(f"[{self.name}] Received REDIRECT_NS for {dest_name} - forwarding back (intermediate node)")
+                
+                for entry in list(pending_ifaces):
+                    try:
+                        # normalize to port
+                        if isinstance(entry, dict):
+                            port = entry.get("port")
+                        else:
+                            port = entry
+
+                        if port is None:
+                            continue
+
+                        self.sock.sendto(packet, ("127.0.0.1", int(port)))
+                        print(f"[{self.name}] Forwarded REDIRECT_NS for {dest_name} to NS-query iface port {port}")
+                        self.log(f"[{self.name}] Forwarded REDIRECT_NS for {dest_name} to NS-query iface port {port}")
+                    except Exception as e:
+                        self.log(f"[{self.name}] Error forwarding REDIRECT_NS to NS-query iface {entry}: {e}")
+                return
+            
+            # This is the edge node - process the redirect
+            alt_ns_name = parsed.get("AlternateNS")
+            seq_num = parsed.get("SequenceNumber")
+            
+            print(f"[{self.name}] Received REDIRECT_NS from {addr} (edge node - processing)")
+            print(f"[{self.name}] Redirecting Interest '{dest_name}' to alternate NameServer: {alt_ns_name}")
+            self.log(f"[{self.name}] Received REDIRECT_NS: query {alt_ns_name} for {dest_name}")
+            
+            # Look up the port for the alternate NameServer
+            alt_ns_port = None
+            if alt_ns_name in self.name_to_port:
+                alt_ns_port = self.name_to_port[alt_ns_name]
+            
+            if alt_ns_port:
+                # Send a new INTEREST (QUERY) to the alternate NameServer
+                # with data_flag=True to indicate this is a real interest that needs data
+                interest_pkt = create_interest_packet(
+                    seq_num=seq_num,
+                    name=dest_name,
+                    flags=0x0,
+                    origin_node=self.name,
+                    data_flag=True,
+                    visited_domains=[]
+                )
+                try:
+                    self.sock.sendto(interest_pkt, ("127.0.0.1", int(alt_ns_port)))
+                    print(f"[{self.name}] Sent Interest to alternate NameServer {alt_ns_name} (port {alt_ns_port}) for {dest_name}")
+                    self.log(f"[{self.name}] Sent Interest to alternate NameServer {alt_ns_name} (port {alt_ns_port}) for {dest_name}")
+                    
+                    # Register this as an NS query in the query table
+                    # Do NOT expect an ACK for this alternate query - treat it as a direct query
+                    if dest_name not in self.ns_query_table:
+                        self.ns_query_table[dest_name] = []
+                    
+                except Exception as e:
+                    print(f"[{self.name}] Failed to send Interest to alternate NameServer {alt_ns_name}: {e}")
+                    self.log(f"[{self.name}] Failed to send Interest to alternate NameServer {alt_ns_name}: {e}")
+            else:
+                print(f"[{self.name}] Unknown alternate NameServer: {alt_ns_name}")
+                self.log(f"[{self.name}] Unknown alternate NameServer: {alt_ns_name}")
+            
             return
         else:
             print(f"[{self.name}] Unknown packet type {packet_type} from {addr} at {timestamp}")

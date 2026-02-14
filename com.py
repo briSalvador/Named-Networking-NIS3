@@ -681,13 +681,13 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[16]
-    destination = nodes[0]
+    original = nodes[12]
+    destination = nodes[10]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
     # Configure the number of requests to run
-    request_count = 5
+    request_count = 1
     
     # Configure the how long the program will run
     request_time = 1

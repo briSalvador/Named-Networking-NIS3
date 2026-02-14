@@ -15,6 +15,7 @@ HELLO = 0x4
 UPDATE = 0x5
 ERROR = 0x6
 ROUTE_ACK = 0x7
+REDIRECT_NS = 0x8
 
 ACK_FLAG = 0x1
 RET_FLAG = 0x2
@@ -435,6 +436,61 @@ def append_visited_domain(parsed, new_domain):
     # except Exception as e:
     #     print(f"[NS parse_neighbor_update_packet] Error parsing packet: {e}")
     #     return None
+
+def create_redirect_ns_packet(seq_num, dest_name, alt_ns_name, flags=0x0):
+    """
+    Create a REDIRECT_NS packet to tell an edge node to query a different NameServer.
+    
+    Format:
+      | packet_type_flags (1B) | seq_num (1B) | alt_ns_length (1B) | dest_name_length (1B) |
+      | alt_ns_name (variable) | dest_name (variable) |
+    """
+    packet_type = REDIRECT_NS
+    packet_type_flags = (packet_type << 4) | (flags & 0xF)
+
+    seq_num = seq_num & 0xFF
+    
+    alt_ns_bytes = alt_ns_name.encode("utf-8")
+    alt_ns_length = len(alt_ns_bytes) & 0xFF
+    
+    dest_name_bytes = dest_name.encode("utf-8")
+    dest_name_length = len(dest_name_bytes) & 0xFF
+
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, alt_ns_length, dest_name_length)
+    packet = header + alt_ns_bytes + dest_name_bytes
+    return packet
+
+def parse_redirect_ns_packet(packet):
+    """Parse REDIRECT_NS packet sent by NameServer to edge node."""
+    if len(packet) < 4:
+        raise ValueError("Invalid REDIRECT_NS packet: too short")
+    
+    packet_type_flags, seq_num, alt_ns_length, dest_name_length = struct.unpack("!BBBB", packet[:4])
+    
+    alt_ns_start = 4
+    alt_ns_end = alt_ns_start + alt_ns_length
+    if len(packet) < alt_ns_end:
+        raise ValueError("Invalid REDIRECT_NS packet: incomplete alt_ns_name")
+    
+    alt_ns_name = packet[alt_ns_start:alt_ns_end].decode("utf-8")
+    
+    dest_name_start = alt_ns_end
+    dest_name_end = dest_name_start + dest_name_length
+    if len(packet) < dest_name_end:
+        raise ValueError("Invalid REDIRECT_NS packet: incomplete dest_name")
+    
+    dest_name = packet[dest_name_start:dest_name_end].decode("utf-8")
+    
+    packet_type = (packet_type_flags >> 4) & 0xF
+    flags = packet_type_flags & 0xF
+    
+    return {
+        "PacketType": packet_type,
+        "Flags": flags,
+        "SequenceNumber": seq_num,
+        "AlternateNS": alt_ns_name,
+        "DestinationName": dest_name,
+    }
 
 class NameServer:
     def log(self, message):
@@ -1034,6 +1090,54 @@ class NameServer:
                     print(f"[{self.ns_name}] No border routers for domain {target_top}; using nearest border router {nearest_border}")
                     self.log(f" No border routers for domain {target_top}; using nearest border router {nearest_border}")
                     border_candidates.append(nearest_border)
+
+            # Check if origin node is the same as the border router needed for destination
+            # If so, redirect the origin to query its alternate NameServer instead
+            for candidate in border_candidates:
+                # Check if src_name matches the candidate (considering multi-name nodes)
+                src_parts = src_name.split()
+                candidate_parts = candidate.split()
+                
+                # If origin and border candidate share the same node identity
+                if src_name == candidate or any(p in candidate_parts for p in src_parts):
+                    # Find the alternate NameServer for this edge node
+                    # An edge node has aliases in multiple domains, so find a domain OTHER than the current NS domain
+                    alt_ns = None
+                    
+                    # Get domains from origin node
+                    src_domains = set()
+                    for part in src_parts:
+                        top = _top_domain(part)
+                        if top:
+                            src_domains.add(top)
+                    
+                    # Find a domain that the origin is in, but is NOT the current NS's domain
+                    for domain in src_domains:
+                        if domain != my_top:
+                            # Construct the alternate NS name for this domain
+                            alt_ns = f"/{domain}/NameServer1"
+                            print(f"[{self.ns_name}] [DEBUG] Found alternate domain: {domain}, constructing alt_ns: {alt_ns}")
+                            self.log(f" [DEBUG] Found alternate domain: {domain}, constructing alt_ns: {alt_ns}")
+                            break
+                    
+                    if alt_ns:
+                        # Send REDIRECT_NS packet to origin, telling it to query the alternate NS
+                        print(f"[{self.ns_name}] REDIRECT: Origin {src_name} is the edge router for domain {target_top}")
+                        print(f"[{self.ns_name}] Sending REDIRECT_NS to {src_name} to query {alt_ns} for {dest_name}")
+                        self.log(f" REDIRECT: Origin {src_name} is the edge router for domain {target_top}")
+                        self.log(f" Sending REDIRECT_NS to {src_name} to query {alt_ns} for {dest_name}")
+                        
+                        redirect_pkt = create_redirect_ns_packet(seq_num=seq_num, dest_name=dest_name, alt_ns_name=alt_ns)
+                        try:
+                            self.sock.sendto(redirect_pkt, addr)
+                            return
+                        except Exception as e:
+                            print(f"[{self.ns_name}] Failed to send REDIRECT_NS to {addr}: {e}")
+                            self.log(f" Failed to send REDIRECT_NS to {addr}: {e}")
+                            return
+                    else:
+                        print(f"[{self.ns_name}] [DEBUG] No alternate domain found, continuing with normal forwarding")
+                        self.log(f" [DEBUG] No alternate domain found, continuing with normal forwarding")
 
             for candidate in border_candidates:
                 # 1) Try path from THIS NS to the candidate (so NS can send to a neighbor it knows)
