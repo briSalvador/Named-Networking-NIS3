@@ -17,6 +17,6 @@
 
 /UP/NameServer1: 7003
 /UP: 6005, 7002, 7003
-/UP/Salcedo: 6005, 7001, 7004
+/UP/Salcedo: 6005, 7001, 7003, 7004
 /UP/Lara: 7000, 7001, 7002
 /UP/Salcedo/PC1: 7002
