@@ -702,7 +702,7 @@ if __name__ == "__main__":
     # 19 = up_ns
     
     original = nodes[0]
-    destination = nodes[16]
+    destination = nodes[5]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
@@ -1149,9 +1149,9 @@ def print_network_statistics():
         print(f"\n[PHASE] {p}")
         print(f"  Duration:           {s['total_time']:.3f} seconds")
         if s['total_data_bits'] > 0:
-            print(f"  Total Data Bits :   {s['total_data_bits']/8} bytes ({s['total_data_bits']/8000} kilobytes)")
+            print(f"  Total Data Bits :   {s['total_data_bits']/1000:.1f} kilobits")
         else:
-            print(f"  Total Data Bits :   0 bytes")
+            print(f"  Total Data Bits :   0.000 kilobits")
         print(f"  Total Packets:      {s['total_packets']} packets")
         print(f"  INTEREST:           {s['packet_counts'].get('INTEREST', 0)}")
         print(f"  INTEREST_QUERY:     {s['packet_counts'].get('INTEREST_QUERY', 0)}")
@@ -1202,11 +1202,11 @@ def print_network_statistics():
     print(f"  Completed Interest-Data Pairs: {combined['completed_pairs']}")
 
     print("\n[THROUGHPUT METRICS]")
-    print(f"  Total Data Transmitted: {combined['total_data_bits']/8:.0f} bytes ({combined['total_data_bits']/8000:.2f} kilobytes)")
+    print(f"  Total Data Transmitted: {combined['total_data_bits']/1000:.1f} kilobits")
     if combined['avg_latency_ms'] == 0 or combined['completed_pairs'] == 0:
         print(f"  Throughput:             0.000 Kbps")
     else: 
-        print(f"  Throughput:             {((combined['total_data_bits']/combined['avg_latency_ms'])/combined['completed_pairs'])/8:.3f} Kbps")
+        print(f"  Throughput:             {((combined['total_data_bits']/combined['avg_latency_ms'])/combined['completed_pairs']):.3f} Kbps")
     print(f"  Test Duration:          {combined['total_time']:.3f} seconds")
 
     print("\n[PACKET TRANSMISSION OVERHEAD]")

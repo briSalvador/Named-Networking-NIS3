@@ -534,7 +534,7 @@ class NameServer:
         """Record a hop for non-HELLO/UPDATE packets"""
         try:
             # Only record hops for packets that are not HELLO or UPDATE (those are initialization)
-            if packet_type not in [HELLO, UPDATE]:
+            if packet_type == INTEREST:
                 gs = self._get_global_stats()
                 if gs:
                     gs.record_hop()
