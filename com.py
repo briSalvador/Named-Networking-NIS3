@@ -37,7 +37,7 @@ class NetworkStatistics:
             'REDIRECT_NS': 0
         }
         self.total_data_bits_transferred = 0
-        self.total_hops = 0    # bandaid *skull emoji*
+        self.total_hops = 0
         self.interest_data_pairs = {}  # {(origin, name, seq): {'interest_time': ts, 'data_time': ts}}
         # start_time is set when the phase actually begins
         self.start_time = None
@@ -701,13 +701,13 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[2]
-    destination = nodes[5]
+    original = nodes[0]
+    destination = nodes[16]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
     # Configure the number of requests to run
-    request_count = 1
+    request_count = 2
     
     # Configure the how long the program will run
     request_time = 10
@@ -1176,7 +1176,8 @@ def print_network_statistics():
         if s['total_hops']==0:
             print(f"  Total Hops:         0 hops")
         else:
-            print(f"  Total Hops:         {s['total_hops']-1} hops")
+            s['total_hops'] -= 1
+            print(f"  Total Hops:         {s['total_hops']} hops")
         print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
         # Print paths for completed interest-data pairs in this phase
         try:
@@ -1202,7 +1203,10 @@ def print_network_statistics():
 
     print("\n[THROUGHPUT METRICS]")
     print(f"  Total Data Transmitted: {combined['total_data_bits']/8:.0f} bytes ({combined['total_data_bits']/8000:.2f} kilobytes)")
-    print(f"  Throughput:             {((combined['total_data_bits']/combined['avg_latency_ms'])/combined['completed_pairs']):.3f} Kbps")
+    if combined['avg_latency_ms'] == 0 or combined['completed_pairs'] == 0:
+        print(f"  Throughput:             0.000 Kbps")
+    else: 
+        print(f"  Throughput:             {((combined['total_data_bits']/combined['avg_latency_ms'])/combined['completed_pairs'])/8:.3f} Kbps")
     print(f"  Test Duration:          {combined['total_time']:.3f} seconds")
 
     print("\n[PACKET TRANSMISSION OVERHEAD]")
@@ -1233,7 +1237,7 @@ def print_network_statistics():
     if combined['total_hops']==0:
         print(f"  Total Hops:         0 hops")
     else:
-        print(f"  Total Hops:         {combined['total_hops']-1} hops")
+        print(f"  Total Hops:         {combined['total_hops']-combined['packet_counts'].get('INTEREST')} hops")
 
     print("\n" + "="*80)
 
