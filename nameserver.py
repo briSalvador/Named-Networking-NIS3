@@ -38,7 +38,7 @@ def create_data_packet(seq_num, name, payload, flags=0x0):
     payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
     payload_size = len(payload_bytes) & 0xFF
 
-    header = struct.pack("!BBBB", packet_type_flags, seq_num, payload_size, name_length)
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, name_length, payload_size)
     return header + name_bytes + payload_bytes
 
 def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False, visited_domains=None):
@@ -185,7 +185,7 @@ def create_route_data_packet(seq_num, name, payload, flags=0x0):
         payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
     payload_size = len(payload_bytes) & 0xFF
 
-    header = struct.pack("!BBBB", packet_type_flags, seq_num, payload_size, name_length)
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, name_length, payload_size)
     return header + name_bytes + payload_bytes
 
 def parse_interest_packet(packet):

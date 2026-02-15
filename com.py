@@ -83,7 +83,7 @@ class NetworkStatistics:
             self.total_data_bits_transferred += payload_size * 8  # Convert bytes to bits
             
             # Track payload bits (actual data) vs control bits (header overhead)
-            # DATA packet header: packet_type_flags(1) + seq_num(1) + payload_size(1) + name_length(1) + fragment_num(1) + total_fragments(1) = 6 bytes
+            # DATA packet header: packet_type_flags(1) + seq_num(1) + name_length(1) + fragment_num(1) + total_fragments(1) + payload_size(1) = 6 bytes
             # Plus name length (variable)
             name_bytes = len(name.encode('utf-8'))
             header_bits = (6 + name_bytes) * 8
@@ -710,10 +710,10 @@ if __name__ == "__main__":
     request_count = 1
     
     # Configure the how long the program will run
-    request_time = 60
+    request_time = 10
 
-    # manual_run(original, destination, global_stats, location_name, request_count)
-    request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
+    manual_run(original, destination, global_stats, location_name, request_count)
+    # request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
@@ -1148,7 +1148,10 @@ def print_network_statistics():
         s = phase_stats[p]
         print(f"\n[PHASE] {p}")
         print(f"  Duration:           {s['total_time']:.3f} seconds")
-        print(f"  Total Data Bits:    {s['total_data_bits']} bits")
+        if s['total_data_bits'] > 0:
+            print(f"  Total Data Bits :   {s['total_data_bits']/8} bytes ({s['total_data_bits']/8000} kilobytes)")
+        else:
+            print(f"  Total Data Bits :   0 bytes")
         print(f"  Total Packets:      {s['total_packets']} packets")
         print(f"  INTEREST:           {s['packet_counts'].get('INTEREST', 0)}")
         print(f"  INTEREST_QUERY:     {s['packet_counts'].get('INTEREST_QUERY', 0)}")
@@ -1198,7 +1201,7 @@ def print_network_statistics():
     print(f"  Completed Interest-Data Pairs: {combined['completed_pairs']}")
 
     print("\n[THROUGHPUT METRICS]")
-    print(f"  Total Data Transmitted: {combined['total_data_bits']} bits ({combined['total_data_bits']/8:.1f} bytes)")
+    print(f"  Total Data Transmitted: {combined['total_data_bits']} bits ({combined['total_data_bits']/8} bytes)")
     print(f"  Throughput:             {((combined['total_data_bits']/combined['avg_latency_ms'])/combined['completed_pairs']):.3f} Kbps")
     print(f"  Test Duration:          {combined['total_time']:.3f} seconds")
 
@@ -1227,7 +1230,10 @@ def print_network_statistics():
     print(f"  Data Packet Ratio:      {100 - combined['control_overhead_percent']:.2f}%")
 
     print("\n[ROUTING HOPS]")
-    print(f"  Total Hops:             {combined['total_hops']} hops")
+    if combined['total_hops']==0:
+        print(f"  Total Hops:         0 hops")
+    else:
+        print(f"  Total Hops:         {combined['total_hops']-1} hops")
 
     print("\n" + "="*80)
 

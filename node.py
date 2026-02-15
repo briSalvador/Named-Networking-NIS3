@@ -106,7 +106,7 @@ def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_
     payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
     payload_size = len(payload_bytes) & 0xFF
 
-    header = struct.pack("!BBBBBB", packet_type_flags, seq_num, payload_size, name_length, fragment_num, total_fragments)
+    header = struct.pack("!BBBBBB", packet_type_flags, seq_num, name_length, fragment_num, total_fragments, payload_size)
     packet = header + name_bytes + payload_bytes
     return packet
 
@@ -215,13 +215,13 @@ def parse_interest_packet(packet):
 def parse_route_data_packet(packet):
     """
     Canonical parser for ROUTING_DATA packets.
-    Header: !BBBB => packet_type_flags, seq_num, info_size, name_length
+    Header: !BBBB => packet_type_flags, seq_num, name_length, info_size
     Payload: name_bytes (name_length), then routing_info_bytes (info_size)
     routing_info is JSON when sent by NameServer.
     """
     if len(packet) < 4:
         raise ValueError("Packet too short for ROUTE header")
-    packet_type_flags, seq_num, info_size, name_length = struct.unpack("!BBBB", packet[:4])
+    packet_type_flags, seq_num, name_length, info_size = struct.unpack("!BBBB", packet[:4])
     total_len = 4 + name_length + info_size
     if len(packet) < total_len:
         raise ValueError("Packet shorter than declared ROUTE lengths")
@@ -277,7 +277,7 @@ def parse_route_data_packet(packet):
     }
 
 def parse_data_packet(packet):
-    packet_type_flags, seq_num, payload_size, name_length, fragment_num, total_fragments = struct.unpack("!BBBBBB", packet[:6])
+    packet_type_flags, seq_num, name_length, fragment_num, total_fragments, payload_size = struct.unpack("!BBBBBB", packet[:6])
     name_start = 6
     name_end = name_start + name_length
     name = packet[name_start:name_end].decode("utf-8")
@@ -323,7 +323,7 @@ def create_route_data_packet(seq_num, name, routing_info, flags=0x0):
         payload_bytes = routing_info.encode("utf-8") if isinstance(routing_info, str) else routing_info
     payload_size = len(payload_bytes) & 0xFF
 
-    header = struct.pack("!BBBB", packet_type_flags, seq_num, payload_size, name_length)
+    header = struct.pack("!BBBB", packet_type_flags, seq_num, name_length, payload_size)
     return header + name_bytes + payload_bytes
 
 # ---------------- HELLO / UPDATE Packets ----------------
