@@ -569,7 +569,7 @@ if __name__ == "__main__":
         for i in range(1, r_count + 1):
             digit_str = str(i).zfill(5) 
             interest_files[i] = f"{loc_name}/file{digit_str}.txt"
-            messages[i] = f"Hifromdst{digit_str} " * 10
+            messages[i] = f"Hifromdst{digit_str} " * 80
 
         # Send requests dynamically based on r_count
         for i in range(1, r_count + 1):
@@ -611,7 +611,7 @@ if __name__ == "__main__":
                 
                 digit_str = str(ctr).zfill(5)
                 interest_files[ctr] = f"{loc_name}/file{digit_str}.txt"
-                messages[ctr] = f"Hifromdst{digit_str} " * 10
+                messages[ctr] = f"Hifromdst{digit_str} " * 80
 
                 try:
                     dest.add_cs(interest_files[ctr], messages[ctr])
@@ -646,7 +646,7 @@ if __name__ == "__main__":
                 digit_str = str(ctr).zfill(5)
                 
                 interest_files[ctr] = f"{loc_name}/file{digit_str}.txt"
-                messages[ctr] = f"Hifromdst{digit_str} " * 10
+                messages[ctr] = f"Hifromdst{digit_str} " * 80
 
                 try:
                     dest.add_cs(interest_files[ctr], messages[ctr])
@@ -701,7 +701,7 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[3]
+    original = nodes[2]
     destination = nodes[5]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
@@ -1201,7 +1201,7 @@ def print_network_statistics():
     print(f"  Completed Interest-Data Pairs: {combined['completed_pairs']}")
 
     print("\n[THROUGHPUT METRICS]")
-    print(f"  Total Data Transmitted: {combined['total_data_bits']} bits ({combined['total_data_bits']/8} bytes)")
+    print(f"  Total Data Transmitted: {combined['total_data_bits']/8:.0f} bytes ({combined['total_data_bits']/8000:.2f} kilobytes)")
     print(f"  Throughput:             {((combined['total_data_bits']/combined['avg_latency_ms'])/combined['completed_pairs']):.3f} Kbps")
     print(f"  Test Duration:          {combined['total_time']:.3f} seconds")
 

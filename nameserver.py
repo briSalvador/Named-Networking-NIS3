@@ -27,7 +27,7 @@ NAME_ERROR = 0x2
 
 _PRINT_LOCK = threading.Lock()
 
-def create_data_packet(seq_num, name, payload, flags=0x0):
+def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_fragments=1):
     packet_type = DATA
     packet_type_flags = (packet_type << 4) | (flags & 0xF)
 
@@ -36,9 +36,9 @@ def create_data_packet(seq_num, name, payload, flags=0x0):
     name_length = len(name_bytes)
 
     payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
-    payload_size = len(payload_bytes) & 0xFF
+    payload_size = len(payload_bytes) & 0xFFFF
 
-    header = struct.pack("!BBBB", packet_type_flags, seq_num, name_length, payload_size)
+    header = struct.pack("!BBBBBH", packet_type_flags, seq_num, name_length, fragment_num, total_fragments, payload_size)
     return header + name_bytes + payload_bytes
 
 def create_interest_packet(seq_num, name, flags=0x0, origin_node="", data_flag=False, visited_domains=None):

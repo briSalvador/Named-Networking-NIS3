@@ -104,9 +104,9 @@ def create_data_packet(seq_num, name, payload, flags=0x0, fragment_num=1, total_
     name_length = len(name_bytes)
 
     payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
-    payload_size = len(payload_bytes) & 0xFF
+    payload_size = len(payload_bytes) & 0xFFFF
 
-    header = struct.pack("!BBBBBB", packet_type_flags, seq_num, name_length, fragment_num, total_fragments, payload_size)
+    header = struct.pack("!BBBBBH", packet_type_flags, seq_num, name_length, fragment_num, total_fragments, payload_size)
     packet = header + name_bytes + payload_bytes
     return packet
 
@@ -277,8 +277,8 @@ def parse_route_data_packet(packet):
     }
 
 def parse_data_packet(packet):
-    packet_type_flags, seq_num, name_length, fragment_num, total_fragments, payload_size = struct.unpack("!BBBBBB", packet[:6])
-    name_start = 6
+    packet_type_flags, seq_num, name_length, fragment_num, total_fragments, payload_size = struct.unpack("!BBBBBH", packet[:7])
+    name_start = 7
     name_end = name_start + name_length
     name = packet[name_start:name_end].decode("utf-8")
     payload = packet[name_end:name_end + payload_size]
