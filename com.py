@@ -605,21 +605,21 @@ if __name__ == "__main__":
         if rand:
             while time.time() - curr_req_timer < float(r_time):
                 orig_int, dest_int = random.sample(range(17), 2)
-                orig = nodes[orig_int]
-                dest = nodes[dest_int]
-                loc_name = dest.name
+                original = nodes[orig_int]
+                destination = nodes[dest_int]
+                location_name = destination.name
                 
                 digit_str = str(ctr).zfill(5)
-                interest_files[ctr] = f"{loc_name}/file{digit_str}.txt"
+                interest_files[ctr] = f"{location_name}/file{digit_str}.txt"
                 messages[ctr] = f"Hifromdst{digit_str} " * 80
 
                 try:
-                    dest.add_cs(interest_files[ctr], messages[ctr])
+                    destination.add_cs(interest_files[ctr], messages[ctr])
                 except Exception:
                     pass
 
                 try:
-                    orig.reset_received_data(interest_files[ctr])
+                    original.reset_received_data(interest_files[ctr])
                 except Exception:
                     pass
 
@@ -629,11 +629,11 @@ if __name__ == "__main__":
                     pass
 
                 try:
-                    send_interest_via_ns(orig, seq_num=0, name=interest_files[ctr], data_flag=False)
+                    send_interest_via_ns(original, seq_num=0, name=interest_files[ctr], data_flag=False)
                     start_time = time.time()
-                    while not orig.has_received_data(interest_files[ctr]):
+                    while not original.has_received_data(interest_files[ctr]):
                         if time.time() - start_time > max_wait_time:
-                            print(f"[WARNING] Timeout waiting for {orig.name} to receive data for {interest_files[ctr]}")
+                            print(f"[WARNING] Timeout waiting for {original.name} to receive data for {interest_files[ctr]}")
                             break
                         time.sleep(0.001)
                 except Exception:
@@ -707,13 +707,13 @@ if __name__ == "__main__":
     runtime_rand = True  # configure if origin and nodes should be random
 
     # Configure the number of requests to run
-    request_count = 2
+    request_count = 5
     
     # Configure the how long the program will run
-    request_time = 10
+    request_time = 3
 
-    manual_run(original, destination, global_stats, location_name, request_count)
-    # request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
+    # manual_run(original, destination, global_stats, location_name, request_count)
+    request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")

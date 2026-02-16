@@ -2187,6 +2187,18 @@ class Node:
                                 self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
                                 print(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
                                 self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
+                                # Record the requester interface so returned ROUTE_DATA can be forwarded back.
+                                try:
+                                    key = parsed.get("Name")
+                                    if key:
+                                        self.ns_query_table.setdefault(key, [])
+                                        exists = any(item.get("port") == addr[1] for item in self.ns_query_table[key])
+                                        if not exists:
+                                            # ack_only False because we expect full ROUTE_DATA replies
+                                            self.ns_query_table[key].append({"port": addr[1], "ack_only": False})
+                                            self.log(f"[{self.name}] Registered NS query for {key} from iface {addr[1]}")
+                                except Exception:
+                                    pass
                                 # mark buffered
                                 with self.buffer_lock:
                                     for entry in self.buffer:
@@ -2571,39 +2583,43 @@ class Node:
             # Forward the ack toward all recorded NS-query interfaces (propagate ack upstream)
             # Try exact lookup first, then tolerant matches (handles stripped vs full-encap keys).
             pending = self.ns_query_table.get(dest_name)
-            
             matched_key = dest_name
-            # if not pending:
-            #     # attempt inner-name and ENCAP-normalized matches
-            #     for k, v in list(self.ns_query_table.items()):
-            #         if not isinstance(k, str):
-            #             continue
-            #         # direct exact match
-            #         if k == dest_name:
-            #             pending = v
-            #             matched_key = k
-            #             break
-            #         # ENCAP key that ends with "|<dest>"
-            #         if k.endswith("|" + dest_name):
-            #             pending = v
-            #             matched_key = k
-            #             break
-            #         # if dest is inner part of an ENCAP key
-            #         if k.startswith("ENCAP:") and "|" in k:
-            #             try:
-            #                 _, inner = k.split("|", 1)
-            #                 inner = inner.strip()
-            #                 if inner == dest_name:
-            #                     pending = v
-            #                     matched_key = k
-            #                     break
-            #             except Exception:
-            #                 pass
-            #         # substring fallback (defensive)
-            #         if dest_name in k:
-            #             pending = v
-            #             matched_key = k
-            #             break
+
+            # If exact lookup failed, try tolerant matching to handle cases where
+            # nodes registered ENCAP keys, inner names, or normalized ENCAP forms.
+            if not pending:
+                for k, v in list(self.ns_query_table.items()):
+                    try:
+                        if not isinstance(k, str):
+                            continue
+                        # exact match
+                        if k == dest_name:
+                            pending = v
+                            matched_key = k
+                            break
+                        # ENCAP key that ends with "|<dest>"
+                        if k.endswith("|" + dest_name):
+                            pending = v
+                            matched_key = k
+                            break
+                        # if dest is inner part of an ENCAP key (ENCAP:<border>|<inner>)
+                        if k.startswith("ENCAP:") and "|" in k:
+                            try:
+                                _, inner = k.split("|", 1)
+                                inner = inner.strip()
+                                if inner == dest_name:
+                                    pending = v
+                                    matched_key = k
+                                    break
+                            except Exception:
+                                pass
+                        # substring fallback (defensive) - last resort
+                        if dest_name in k:
+                            pending = v
+                            matched_key = k
+                            break
+                    except Exception:
+                        continue
             if pending:
                 for entry in list(pending):
                     try:
@@ -3299,6 +3315,19 @@ class Node:
                     # Do NOT expect an ACK for this alternate query - treat it as a direct query
                     if dest_name not in self.ns_query_table:
                         self.ns_query_table[dest_name] = []
+
+                    # Ensure any local PIT interfaces that requested this content are
+                    # recorded so that when ROUTE_DATA arrives we can forward it back
+                    try:
+                        pit_ifaces = list(self.pit.get(dest_name, []))
+                        for iface in pit_ifaces:
+                            exists = any(item.get("port") == iface for item in self.ns_query_table[dest_name])
+                            if not exists:
+                                # ack_only False because we want full replies forwarded
+                                self.ns_query_table[dest_name].append({"port": iface, "ack_only": False})
+                                self.log(f"[{self.name}] Registered NS-query mapping for {dest_name} -> iface {iface} (from REDIRECT_NS handling)")
+                    except Exception:
+                        pass
                     
                 except Exception as e:
                     print(f"[{self.name}] Failed to send Interest to alternate NameServer {alt_ns_name}: {e}")
