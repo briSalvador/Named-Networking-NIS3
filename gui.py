@@ -792,7 +792,12 @@ class LogGUI:
 
             cs = getattr(node, "cs", {})
             for name, data in cs.items():
-                text = data.decode('utf-8')
+                if isinstance(data, bytes):
+                    text = data.decode('utf-8', errors='replace')
+                elif data is None:
+                    text = ""
+                else:
+                    text = str(data)
                 if len(text) > 80:
                     text = text[:77] + "..."
                 rows.append((name, text))

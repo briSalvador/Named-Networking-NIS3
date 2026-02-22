@@ -430,54 +430,50 @@ if __name__ == "__main__":
             gonzaga, admu, acam1, kostka, axu, up, salcedo, lara, upc1, ns, admu_ns, up_ns]
 
     # load all nodes
-    # Start statistics phase for initialization (hello/topology)
-    try:
-        global_stats.set_phase("initialization")
-    except Exception:
-        pass
+    # Start statistics phase for initialization (discovery)
+    # try:
+    #     global_stats.set_phase("initialization")
+    # except Exception:
+    #     pass
 
-    for node in nodes:
-        # NameServers and Nodes both implement load_neighbors_from_file
+    # for node in nodes:
+    #     # NameServers and Nodes both implement load_neighbors_from_file
+    #     try:
+    #         node.load_neighbors_from_file("neighbors.txt")
+    #     except Exception:
+    #         pass
+    # # End initialization phase now that neighbor loading is complete
+    # try:
+    #     global_stats.end_active_phase()
+    # except Exception:
+    #     pass
+    
+    # # keep a short pause for network stabilization, but do not count it in initialization
+
+    # Start periodic discovery reload every 30 seconds.
+    # This ensures NameServers and Nodes re-announce and re-learn neighbor ports.
+    def _periodic_discovery_loop(all_nodes, interval=30):
         try:
-            node.load_neighbors_from_file("neighbors.txt")
+            global_stats.set_phase("initialization")
         except Exception:
             pass
-    # End initialization phase now that neighbor loading is complete
-    try:
-        global_stats.end_active_phase()
-    except Exception:
-        pass
-    
-    # keep a short pause for network stabilization, but do not count it in initialization
+
+        while True:
+            for n in all_nodes:
+                try:
+                    n.load_neighbors_from_file("neighbors.txt")
+                except Exception:
+                    pass
+            try:
+                global_stats.end_active_phase()
+            except Exception:
+                pass
+            time.sleep(interval)
+
+    discovery_thread = threading.Thread(target=_periodic_discovery_loop, args=(nodes, 30), daemon=True)
+    discovery_thread.start()
+
     time.sleep(1)
-
-    # Start periodic HELLO / neighbor-file reload every 30 seconds.
-    # This ensures NameServers and Nodes re-announce and re-learn neighbor ports.
-    # def _periodic_hello_loop(all_nodes, interval=30):
-    #     while True:
-    #         for n in all_nodes:
-    #             try:
-    #                 # Both Node and NameServer implement load_neighbors_from_file
-    #                 n.load_neighbors_from_file("neighbors.txt")
-    #             except Exception:
-    #                 # ignore per-node failures (keep loop running)
-    #                 pass
-    #             # If a Node exposes a neighbor-discovery loop, start it once (daemon)
-    #             try:
-    #                 if hasattr(n, "start_neighbor_discovery") and callable(getattr(n, "start_neighbor_discovery")):
-    #                     # start_neighbor_discovery returns a thread; avoid starting multiple times
-    #                     if not getattr(n, "_neighbor_discovery_started", False):
-    #                         try:
-    #                             n.start_neighbor_discovery(interval=interval)
-    #                         except Exception:
-    #                             pass
-    #                         n._neighbor_discovery_started = True
-    #             except Exception:
-    #                 pass
-    #         time.sleep(interval)
-
-    # hello_thread = threading.Thread(target=_periodic_hello_loop, args=(nodes, 30), daemon=True)
-    # hello_thread.start()
 
     # neighbor tables
     # print("\n--- Neighbor Tables ---")
@@ -701,8 +697,8 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[0]
-    destination = nodes[5]
+    original = nodes[11]
+    destination = nodes[13]
     location_name = destination.name
     runtime_rand = True  # configure if origin and nodes should be random
 
