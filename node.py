@@ -1380,6 +1380,36 @@ class Node:
             return self.fib[name]["NextHops"]
         return
 
+    def _resolve_port_by_name(self, name_str):
+        """Resolve a node/name (may be space-separated aliases) to a known port.
+        Returns (port:int or None, resolved_name:str or None)
+        """
+        if not name_str:
+            return None, None
+        # exact
+        if name_str in self.name_to_port:
+            return self.name_to_port[name_str], name_str
+        # token aliases in the string
+        for token in name_str.split():
+            if token in self.name_to_port:
+                return self.name_to_port[token], token
+        # neighbors table (may contain alias forms)
+        for nbr in list(self.neighbor_table.keys()):
+            if nbr == name_str:
+                return self.name_to_port.get(nbr), nbr
+            for token in nbr.split():
+                if token == name_str or token in name_str.split():
+                    return self.name_to_port.get(nbr), nbr
+        # try parent (strip last level)
+        if '/' in name_str:
+            parent = '/' + '/'.join(name_str.strip('/').split('/')[:-1])
+            if parent in self.name_to_port:
+                return self.name_to_port[parent], parent
+            for token in parent.split():
+                if token in self.name_to_port:
+                    return self.name_to_port[token], token
+        return None, None
+
     def forward_interest(self, pkt_obj, target=None):
         # If target is None, use FIB to determine next hops
         if target is None:
@@ -2772,36 +2802,7 @@ class Node:
             route_info = parsed.get("RoutingInfoJson")
             dest_name = parsed.get("Name")
 
-            # Alias-aware port resolution
-            def _resolve_port_by_name(self, name_str):
-                """Resolve a node/name (may be space-separated aliases) to a known port.
-                Returns (port:int or None, resolved_name:str or None)
-                """
-                if not name_str:
-                    return None, None
-                # exact
-                if name_str in self.name_to_port:
-                    return self.name_to_port[name_str], name_str
-                # token aliases in the string
-                for token in name_str.split():
-                    if token in self.name_to_port:
-                        return self.name_to_port[token], token
-                # neighbors table (may contain alias forms)
-                for nbr in list(self.neighbor_table.keys()):
-                    if nbr == name_str:
-                        return self.name_to_port.get(nbr), nbr
-                    for token in nbr.split():
-                        if token == name_str or token in name_str.split():
-                            return self.name_to_port.get(nbr), nbr
-                # try parent (strip last level)
-                if '/' in name_str:
-                    parent = '/' + '/'.join(name_str.strip('/').split('/')[:-1])
-                    if parent in self.name_to_port:
-                        return self.name_to_port[parent], parent
-                    for token in parent.split():
-                        if token in self.name_to_port:
-                            return self.name_to_port[token], token
-                return None, None
+            # Alias-aware port resolution is provided by the class method _resolve_port_by_name
 
             # Only process if origin_name matches this node
             if origin_name == self.name:
@@ -3019,10 +3020,10 @@ class Node:
                         idx = normalized_p2o.index(self.name)
                         for j in range(idx + 1, len(normalized_p2o)):
                             next_hop_name = normalized_p2o[j]
-                            next_port = _resolve_port_by_name(next_hop_name)
+                            next_port, _ = self._resolve_port_by_name(next_hop_name)
                             if next_port is not None:
                                 try:
-                                    self.sock.sendto(packet, ("127.0.0.1", next_port))
+                                    self.sock.sendto(packet, ("127.0.0.1", int(next_port)))
                                     self.log(f"[{self.name}] Forwarded ROUTE DATA along path_to_origin to {next_hop_name} (port {next_port})")
                                     return pkt_obj
                                 except Exception as e:
