@@ -518,6 +518,15 @@ class NameServer:
         except Exception:
             pass
         return None
+    
+    def _record_hello(self):
+        try:
+            gs = self._get_global_stats()
+            if not gs:
+                return
+            gs.record_hello()
+        except Exception as e:
+            print(f"[STATS ERROR] Failed to record packet: {e}")
 
     def _record_packet_stat(self, packet):
         try:
@@ -679,6 +688,10 @@ class NameServer:
                         for port in ports:
                             try:
                                 pkt = create_hello_packet(self.ns_name)
+                                try:
+                                    self._record_hello()
+                                except Exception:
+                                    pass
                                 self.sock.sendto(pkt, (self.host, int(port)))
                                 #print(f"[{self.ns_name}] Sent HELLO packet to {self.host}:{port}")
                             except Exception as e:
