@@ -431,47 +431,57 @@ if __name__ == "__main__":
 
     # load all nodes
     # Start statistics phase for initialization (discovery)
-    # try:
-    #     global_stats.set_phase("initialization")
-    # except Exception:
-    #     pass
+    def single_init(nodes, gs):
 
-    # for node in nodes:
-    #     # NameServers and Nodes both implement load_neighbors_from_file
-    #     try:
-    #         node.load_neighbors_from_file("neighbors.txt")
-    #     except Exception:
-    #         pass
-    # # End initialization phase now that neighbor loading is complete
-    # try:
-    #     global_stats.end_active_phase()
-    # except Exception:
-    #     pass
+        try:
+            gs.set_phase("initialization")
+        except Exception:
+            pass
+
+        for node in nodes:
+            # NameServers and Nodes both implement load_neighbors_from_file
+            try:
+                node.load_neighbors_from_file("neighbors.txt")
+            except Exception:
+                pass
+        # End initialization phase now that neighbor loading is complete
+        try:
+            gs.end_active_phase()
+        except Exception:
+            pass
     
     # # keep a short pause for network stabilization, but do not count it in initialization
 
     # Start periodic discovery reload every 30 seconds.
     # This ensures NameServers and Nodes re-announce and re-learn neighbor ports.
-    def _periodic_discovery_loop(all_nodes, interval=30):
-        try:
-            global_stats.set_phase("initialization")
-        except Exception:
-            pass
-
-        while True:
-            for n in all_nodes:
-                try:
-                    n.load_neighbors_from_file("neighbors.txt")
-                except Exception:
-                    pass
+    def periodic_init(nodes, gs):
+        def _periodic_discovery_loop(all_nodes, interval=30):
             try:
-                global_stats.end_active_phase()
+                gs.set_phase("initialization")
             except Exception:
                 pass
-            time.sleep(interval)
 
-    discovery_thread = threading.Thread(target=_periodic_discovery_loop, args=(nodes, 30), daemon=True)
-    discovery_thread.start()
+            while True:
+                for n in all_nodes:
+                    try:
+                        n.load_neighbors_from_file("neighbors.txt")
+                    except Exception:
+                        pass
+                try:
+                    gs.end_active_phase()
+                except Exception:
+                    pass
+                time.sleep(interval)
+
+        discovery_thread = threading.Thread(target=_periodic_discovery_loop, args=(nodes, 30), daemon=True)
+        discovery_thread.start()
+
+    only_start_init = True
+
+    if only_start_init:
+        single_init(nodes, global_stats)
+    else:
+        periodic_init(nodes, global_stats)
 
     time.sleep(1)
 
@@ -706,7 +716,7 @@ if __name__ == "__main__":
     request_count = 5
     
     # Configure the how long the program will run
-    request_time = 3
+    request_time = 1
 
     # manual_run(original, destination, global_stats, location_name, request_count)
     request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
