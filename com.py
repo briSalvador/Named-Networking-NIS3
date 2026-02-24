@@ -403,6 +403,83 @@ __all__ = ['global_stats', 'NetworkStatistics', 'DebugController']
 # Configure the number of requests to run
 r_count = 1
 
+def load_config(config_file="config.txt"):
+    """Load configuration from config.txt file"""
+    config = {
+        'mode': 'auto',
+        'origin_node': '/DLSU/Andrew/PC1',
+        'destination_node': '/UP',
+        'request_count': 5,
+        'request_time': 1,
+        'only_start_init': True,
+        'random_nodes': True
+    }
+    
+    try:
+        with open(config_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines and comments
+                if not line or line.startswith('#'):
+                    continue
+                
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    # Parse boolean values
+                    if key in ['only_start_init', 'random_nodes']:
+                        config[key] = value.lower() == 'true'
+                    # Parse numeric values
+                    elif key in ['request_count', 'request_time']:
+                        try:
+                            if key == 'request_count':
+                                config[key] = int(value)
+                            else:
+                                config[key] = float(value)
+                        except ValueError:
+                            print(f"[WARNING] Invalid {key} value: {value}, using default")
+                    # Parse string values
+                    else:
+                        config[key] = value
+        
+        print(f"[CONFIG] Loaded configuration from {config_file}")
+        print(f"[CONFIG] Mode: {config['mode']}")
+        print(f"[CONFIG] Origin: {config['origin_node']}")
+        print(f"[CONFIG] Destination: {config['destination_node']}")
+        print(f"[CONFIG] Request Count: {config['request_count']}")
+        print(f"[CONFIG] Request Time: {config['request_time']}")
+        print(f"[CONFIG] Only Start Init: {config['only_start_init']}")
+        print(f"[CONFIG] Random Nodes: {config['random_nodes']}\n")
+        
+        return config
+    
+    except FileNotFoundError:
+        print(f"[WARNING] Config file {config_file} not found, using defaults")
+        return config
+    except Exception as e:
+        print(f"[ERROR] Error loading config: {e}, using defaults")
+        return config
+
+def find_node_by_name(nodes, node_name):
+    """Find a node object by its name"""
+    for node in nodes:
+        if hasattr(node, 'name') and node.name == node_name:
+            return node
+        elif hasattr(node, 'ns_name') and node.ns_name == node_name:
+            return node
+    
+    # If exact match not found, print available nodes for debugging
+    print(f"[ERROR] Node '{node_name}' not found!")
+    print("[INFO] Available nodes:")
+    for node in nodes:
+        if hasattr(node, 'name'):
+            print(f"  - {node.name}")
+        elif hasattr(node, 'ns_name'):
+            print(f"  - {node.ns_name}")
+    return None
+
 if __name__ == "__main__":
     ns = NameServer(ns_name="/DLSU/NameServer1", host="127.0.0.1", port=5000, topo_file="DLSU_NameServer1_topology.txt")
     admu_ns = NameServer(ns_name="/ADMU/NameServer1", host="127.0.0.1", port=6000, topo_file="ADMU_NameServer1_topology.txt")
@@ -476,7 +553,9 @@ if __name__ == "__main__":
         discovery_thread = threading.Thread(target=_periodic_discovery_loop, args=(nodes, 30), daemon=True)
         discovery_thread.start()
 
-    only_start_init = True
+    # Load configuration from config.txt
+    config = load_config("config.txt")
+    only_start_init = config['only_start_init']
 
     if only_start_init:
         single_init(nodes, global_stats)
@@ -707,19 +786,27 @@ if __name__ == "__main__":
     # 18 = admu_ns
     # 19 = up_ns
     
-    original = nodes[11]
-    destination = nodes[13]
-    location_name = destination.name
-    runtime_rand = True  # configure if origin and nodes should be random
-
-    # Configure the number of requests to run
-    request_count = 5
+    # Find nodes by name from config (already loaded above)
+    original = find_node_by_name(nodes, config['origin_node'])
+    destination = find_node_by_name(nodes, config['destination_node'])
     
-    # Configure the how long the program will run
-    request_time = 1
+    if original is None or destination is None:
+        print("[ERROR] Could not find origin or destination node. Exiting.")
+        exit(1)
+    
+    location_name = destination.name
+    runtime_rand = config['random_nodes']
+    request_count = config['request_count']
+    request_time = config['request_time']
+    mode = config['mode']
 
-    # manual_run(original, destination, global_stats, location_name, request_count)
-    request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
+    # Run based on mode from config
+    if mode.lower() == 'manual':
+        print(f"\n[RUN] Starting MANUAL mode: {request_count} requests")
+        manual_run(original, destination, global_stats, location_name, request_count)
+    else:
+        print(f"\n[RUN] Starting AUTO mode: {request_time}s duration")
+        request_count = auto_run(original, destination, global_stats, location_name, request_time, runtime_rand)
 
 """ # destination does not exist
 print("\n[TEST] Testing error case: destination does not exist")
