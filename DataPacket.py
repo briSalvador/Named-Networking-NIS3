@@ -17,15 +17,23 @@ class DataPacket(Packet):
         self.payload_size = len(payload.encode("utf-8")) if isinstance(payload, str) else len(payload)
 
     def __repr__(self):
+        type_names = {
+            INTEREST: 'INTEREST',
+            DATA: 'DATA',
+            ROUTING_DATA: 'ROUTING_DATA',
+            HELLO: 'HELLO',
+            UPDATE: 'UPDATE',
+            ERROR: 'ERROR',
+        }
+        pkt_type_name = type_names.get(self.packet_type, str(self.packet_type))
         return (
             f"<DataPacket\n"
-            f"  PacketType={self.packet_type}\n"
+            f"  PacketType={pkt_type_name}\n"
             f"  Flags={self.flags}\n"
             f"  SequenceNumber={self.seq_num}\n"
-            f"  PayloadSize={self.payload_size}\n"
+            f"  PayloadSize={self.payload_size} bytes\n"
             f"  NameLength={self.name_length}\n"
             f"  Name={self.name}\n"
-            f"  Payload={self.payload}\n"
             f"  Timestamp={self.timestamp}\n"
             f">"
         )

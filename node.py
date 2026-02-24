@@ -2467,8 +2467,7 @@ class Node:
                             timestamp=timestamp
                         )
 
-                        print("Parsed:")
-                        print(re_parsed)
+                        # Do not emit 'Parsed' details to logs/UI to avoid large payload exposure
                         print("Object:")
                         print(re_pkt_obj)
                     except Exception:
@@ -2527,11 +2526,11 @@ class Node:
             else:
                 # Regular DATA from destination: add to CS and forward using PIT
                 self.log(f"Received DATA from {addr} at {timestamp}")
-                self.log(f"Parsed: {parsed}")
+                # Only log high-level receipt and the object (which omits payload)
+                self.log(f"Received DATA from {addr} at {timestamp}")
                 self.log(f"Object: {pkt_obj}")
-                
+
                 print(f"[{self.name}] Received DATA from {addr} at {timestamp}")
-                print(f"Parsed: {parsed}")
                 print(f"Object: {pkt_obj}")
                 # Defer recording: only count when data is delivered to originator
                 try:

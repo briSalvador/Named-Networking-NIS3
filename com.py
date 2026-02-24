@@ -763,29 +763,6 @@ if __name__ == "__main__":
 
         return ctr-1
 
-    # TEST CASE
-
-    # 0 = dpc1
-    # 1 = andrew
-    # 2 = goks
-    # 3 = henry
-    # 4 = dlsu
-    # 5 = miguel
-    # 6 = dcam1
-    # 7 = dxa
-    # 8 = gonzaga
-    # 9 = admu
-    # 10 = acam1
-    # 11 = kostka
-    # 12 = axu
-    # 13 = up
-    # 14 = salcedo
-    # 15 = lara
-    # 16 = upc1
-    # 17 = ns
-    # 18 = admu_ns
-    # 19 = up_ns
-    
     # Find nodes by name from config (already loaded above)
     original = find_node_by_name(nodes, config['origin_node'])
     destination = find_node_by_name(nodes, config['destination_node'])
@@ -1240,38 +1217,38 @@ def print_network_statistics():
     for p in phases:
         s = phase_stats[p]
         print(f"\n[PHASE] {p}")
-        print(f"  Duration:           {s['total_time']:.3f} seconds")
+        print(f"  Duration:               {s['total_time']:.3f} seconds")
         if s['total_data_bits'] > 0:
-            print(f"  Total Data Bits :   {s['total_data_bits']/1000:.1f} kilobits")
+            print(f"  Total Data Bits :       {s['total_data_bits']/1000:.1f} kilobits")
         else:
-            print(f"  Total Data Bits :   0.000 kilobits")
-        print(f"  Total Packets:      {s['total_packets']} packets")
-        print(f"  INTEREST:           {s['packet_counts'].get('INTEREST', 0)}")
-        print(f"  INTEREST_QUERY:     {s['packet_counts'].get('INTEREST_QUERY', 0)}")
-        print(f"  DATA:               {s['packet_counts'].get('DATA', 0)}")
-        print(f"  HELLO:              {s['packet_counts'].get('HELLO', 0)}")
-        print(f"  UPDATE:             {s['packet_counts'].get('UPDATE', 0)}")
-        print(f"  ROUTING_DATA:       {s['packet_counts'].get('ROUTING_DATA', 0)}")
-        print(f"  ROUTE_ACK:          {s['packet_counts'].get('ROUTE_ACK', 0)}")
-        print(f"  ERROR:              {s['packet_counts'].get('ERROR', 0)}")
-        print(f"  REDIRECT_NS:        {s['packet_counts'].get('REDIRECT_NS', 0)}")
+            print(f"  Total Data Bits :       0.000 kilobits")
+        print(f"  Total Packets:          {s['total_packets']} packets")
+        print(f"    - INTEREST:           {s['packet_counts'].get('INTEREST', 0)}")
+        print(f"    - INTEREST_QUERY:     {s['packet_counts'].get('INTEREST_QUERY', 0)}")
+        print(f"    - DATA:               {s['packet_counts'].get('DATA', 0)}")
+        print(f"    - HELLO:              {s['packet_counts'].get('HELLO', 0)}")
+        print(f"    - UPDATE:             {s['packet_counts'].get('UPDATE', 0)}")
+        print(f"    - ROUTING_DATA:       {s['packet_counts'].get('ROUTING_DATA', 0)}")
+        print(f"    - ROUTE_ACK:          {s['packet_counts'].get('ROUTE_ACK', 0)}")
+        print(f"    - ERROR:              {s['packet_counts'].get('ERROR', 0)}")
+        print(f"    - REDIRECT_NS:        {s['packet_counts'].get('REDIRECT_NS', 0)}")
         payload_bits = s.get('payload_bits', 0)
         data_control_bits = s.get('data_control_bits', 0)
         non_data_bits = s.get('non_data_bits', 0)
         control_bits = data_control_bits + non_data_bits
         total_bits = payload_bits + control_bits
         if total_bits > 0:
-            print(f"  Control Bits :      {control_bits}/{total_bits} ({s['control_overhead_percent']:.2f}% overhead)")
+            print(f"  Control Bits :          {control_bits}/{total_bits} ({s['control_overhead_percent']:.2f}% overhead)")
         else:
-            print(f"  Control Bits :      0/0 (0.00% overhead)")
-        print(f"  Avg Latency:        {s['avg_latency_ms']:.3f} ms")
-        print(f"  Throughput:         {s['throughput_kbps']:.3f} Kbps")
+            print(f"  Control Bits :          0/0 (0.00% overhead)")
+        print(f"  Avg Latency:            {s['avg_latency_ms']:.3f} ms")
+        print(f"  Throughput:             {s['throughput_kbps']:.3f} Kbps")
         if s['total_hops']==0:
-            print(f"  Total Hops:         0 hops")
+            print(f"  Total Hops:             0 hops")
         else:
             s['total_hops'] -= 1
-            print(f"  Total Hops:         {s['total_hops']} hops")
-        print(f"  Completed Pairs:    {s.get('completed_pairs', 0)}")
+            print(f"  Total Hops:             {s['total_hops']} hops")
+        print(f"  Completed Pairs:        {s.get('completed_pairs', 0)}")
         # Print paths for completed interest-data pairs in this phase
         try:
             st = global_stats.phases.get(p)
@@ -1280,7 +1257,7 @@ def print_network_statistics():
                     # only show completed pairs
                     if 'interest_time' in info and 'data_time' in info:
                         ipath = info.get('interest_path', [])
-                        print(f"  Interest/Data path: {ipath}")
+                        print(f"  Interest/Data path:     {ipath}")
         except Exception:
             pass
 
@@ -1292,7 +1269,7 @@ def print_network_statistics():
     print(f"  Average Latency:        {combined['avg_latency_ms']:.3f} ms")
     print(f"  Maximum Latency:        {combined['max_latency_ms']:.3f} ms")
     print(f"  Minimum Latency:        {combined['min_latency_ms']:.3f} ms")
-    print(f"  Completed Interest-Data Pairs: {combined['completed_pairs']}")
+    print(f"  Completed Requests:     {combined['completed_pairs']}")
 
     print("\n[THROUGHPUT METRICS]")
     print(f"  Total Data Transmitted: {combined['total_data_bits']/1000:.1f} kilobits")
@@ -1304,15 +1281,15 @@ def print_network_statistics():
 
     print("\n[PACKET TRANSMISSION OVERHEAD]")
     print(f"  Total Packets Sent:     {combined['total_packets']} packets")
-    print(f"    - INTEREST packets:   {combined['packet_counts'].get('INTEREST', 0)}")
-    print(f"    - INTEREST_QUERY packets: {combined['packet_counts'].get('INTEREST_QUERY', 0)}")
-    print(f"    - DATA packets:       {combined['packet_counts'].get('DATA', 0)}")
+    print(f"    - INTEREST:           {combined['packet_counts'].get('INTEREST', 0)}")
+    print(f"    - INTEREST_QUERY:     {combined['packet_counts'].get('INTEREST_QUERY', 0)}")
+    print(f"    - DATA:               {combined['packet_counts'].get('DATA', 0)}")
     print(f"    - ROUTING_DATA:       {combined['packet_counts'].get('ROUTING_DATA', 0)}")
-    print(f"    - HELLO packets:      {combined['packet_counts'].get('HELLO', 0)}")
-    print(f"    - UPDATE packets:     {combined['packet_counts'].get('UPDATE', 0)}")
-    print(f"    - ERROR packets:      {combined['packet_counts'].get('ERROR', 0)}")
-    print(f"    - ROUTE_ACK packets:  {combined['packet_counts'].get('ROUTE_ACK', 0)}")
-    print(f"    - REDIRECT_NS packets:{combined['packet_counts'].get('REDIRECT_NS', 0)}")
+    print(f"    - HELLO:              {combined['packet_counts'].get('HELLO', 0)}")
+    print(f"    - UPDATE:             {combined['packet_counts'].get('UPDATE', 0)}")
+    print(f"    - ERROR:              {combined['packet_counts'].get('ERROR', 0)}")
+    print(f"    - ROUTE_ACK:          {combined['packet_counts'].get('ROUTE_ACK', 0)}")
+    print(f"    - REDIRECT_NS:        {combined['packet_counts'].get('REDIRECT_NS', 0)}")
 
 
     print("\n[CONTROL OVERHEAD]")
@@ -1328,9 +1305,9 @@ def print_network_statistics():
 
     print("\n[ROUTING HOPS]")
     if combined['total_hops']==0:
-        print(f"  Total Hops:         0 hops")
+        print(f"  Total Hops:             0 hops")
     else:
-        print(f"  Total Hops:         {combined['total_hops']-combined['packet_counts'].get('INTEREST')} hops")
+        print(f"  Total Hops:             {combined['total_hops']-combined['packet_counts'].get('INTEREST')} hops")
 
     print("\n" + "="*80)
 

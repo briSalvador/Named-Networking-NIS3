@@ -1113,6 +1113,14 @@ class LogGUI:
             self.log_text.insert("end", line + "\n")
             end_index = self.log_text.index("end-1c")
 
+            # If entry contains an `Object:`/table or a `Timestamp` row, add
+            # an extra blank line to separate it from the next log entry.
+            try:
+                if "\n" in line or re.search(r'^\s*Timestamp\s+\d{4}-\d{2}-\d{2} ', line, re.M) or line.strip().startswith("Object:"):
+                    self.log_text.insert("end", "\n")
+            except Exception:
+                pass
+
             # colors
             for tag_name, pattern in HIGHLIGHT_RULES:
                 for m in re.finditer(pattern, line):
@@ -1244,10 +1252,11 @@ class LogGUI:
                             fields_str = parts[1]
                             
                             fields = {}
-                            for field_pair in fields_str.split():
-                                if "=" in field_pair:
-                                    key, val = field_pair.split("=", 1)
-                                    fields[key] = val
+                            # Find key=value pairs where value may contain spaces
+                            for m in re.finditer(r'([A-Za-z0-9_]+)=((?:(?!\s+[A-Za-z0-9_]+=).)*)', fields_str):
+                                key = m.group(1)
+                                val = m.group(2).strip()
+                                fields[key] = val
                             
                             if fields:
                                 max_key_len = max(len(str(k)) for k in fields.keys())
