@@ -166,13 +166,53 @@ class NetworkStatistics:
         self.end_time = datetime.now()
     
     def calculate_latencies(self):
-        """Calculate latency for each completed interest-data pair"""
+        """Calculate latency for each completed interest-data pair.
+
+        Latency is estimated using a hop-based model: 10 milliseconds per hop.
+        We use the recorded `interest_path` length (number of hops the interest traversed).
+        This function returns latencies in seconds (consistent with previous behavior).
+        """
         latencies = []
         with self.lock:
+            # Determine completed pairs and estimate hop counts per pair.
+            # Prefer explicit per-pair paths if available (interest_path and optional data_path).
+            # If only interest_path is present, assume symmetric return path and double it.
+            # If no per-pair path info is available, fall back to evenly distributing
+            # `self.total_hops` across completed pairs (best-effort).
+            completed_pairs = 0
             for key, times in self.interest_data_pairs.items():
-                if 'interest_time' in times and 'data_time' in times:
-                    latency = (times['data_time'] - times['interest_time']).total_seconds()
-                    latencies.append(latency)
+                if 'data_time' in times:
+                    completed_pairs += 1
+
+            for key, times in self.interest_data_pairs.items():
+                if 'data_time' not in times:
+                    continue
+
+                interest_path = times.get('interest_path', []) or []
+                data_path = times.get('data_path', []) or []
+
+                # If there's exactly one completed pair, prefer using the aggregated
+                # `self.total_hops` (this matches single-run totals reported elsewhere).
+                if completed_pairs == 1:
+                    hop_count = int(self.total_hops)
+                elif interest_path and data_path:
+                    hop_count = len(interest_path) + len(data_path)
+                elif interest_path:
+                    # assume return path mirrors interest path
+                    hop_count = len(interest_path) * 2
+                else:
+                    # fall back: distribute total_hops across completed pairs
+                    try:
+                        hop_count = int(self.total_hops / completed_pairs) if completed_pairs > 0 else 0
+                    except Exception:
+                        hop_count = 0
+
+                # 10 ms per hop -> convert to seconds
+                latency_seconds = (hop_count * 10) / 1000.0
+                # Subtract 10ms for request initialization (sent to self),
+                # but ensure latency never goes below 0.
+                latency_seconds = max(0.0, latency_seconds - 0.01)
+                latencies.append(latency_seconds)
         return latencies
     
     def get_statistics(self):
