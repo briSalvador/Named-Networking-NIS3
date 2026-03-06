@@ -208,7 +208,14 @@ class NetworkStatistics:
                         hop_count = 0
 
                 # 10 ms per hop -> convert to seconds
-                latency_seconds = (hop_count * 10) / 1000.0
+                # Add per-hop jitter: each hop has +/-2ms variation.
+                base_seconds = (hop_count * 10) / 1000.0
+                # Sum per-hop uniform jitter in seconds
+                variation = 0.0
+                if hop_count > 0:
+                    variation = sum(random.uniform(-0.002, 0.002) for _ in range(hop_count))
+
+                latency_seconds = base_seconds + variation
                 # Subtract 10ms for request initialization (sent to self),
                 # but ensure latency never goes below 0.
                 latency_seconds = max(0.0, latency_seconds - 0.01)
