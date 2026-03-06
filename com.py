@@ -210,15 +210,20 @@ class NetworkStatistics:
                 # 10 ms per hop -> convert to seconds
                 # Add per-hop jitter: each hop has +/-2ms variation.
                 base_seconds = (hop_count * 10) / 1000.0
-                # Sum per-hop uniform jitter in seconds
-                variation = 0.0
+                # Generate per-hop uniform jitter samples in seconds and sum them.
+                jitter_samples = []
                 if hop_count > 0:
-                    variation = sum(random.uniform(-0.002, 0.002) for _ in range(hop_count))
+                    jitter_samples = [random.uniform(-0.002, 0.002) for _ in range(hop_count)]
+                variation = sum(jitter_samples)
 
-                latency_seconds = base_seconds + variation
-                # Subtract 10ms for request initialization (sent to self),
-                # but ensure latency never goes below 0.
-                latency_seconds = max(0.0, latency_seconds - 0.01)
+                # Remove the initialization hop's full delay (10ms plus that hop's jitter)
+                # rather than subtracting a fixed 10ms. This removes the exact instance
+                # of per-hop jitter associated with the self-send.
+                init_remove = (0.01 + jitter_samples[0]) if (hop_count > 0 and len(jitter_samples) > 0) else 0.0
+
+                latency_seconds = base_seconds + variation - init_remove
+                # Ensure latency never goes below 0.
+                latency_seconds = max(0.0, latency_seconds)
                 latencies.append(latency_seconds)
         return latencies
     
