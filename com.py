@@ -1260,7 +1260,71 @@ def print_network_statistics():
     global_stats.finalize()
     phases = ["initialization"] + [f"request{i}" for i in range(1, request_count + 1)]
     phase_stats = {p: global_stats.get_statistics(p) for p in phases}
+
+    # For each phase, compute how many border-interest increments occurred
+    # during that phase by scanning border nodes' timestamped logs and
+    # applying a 10ms penalty per observed border hop to the phase avg latency.
+    try:
+        for p in phases:
+            s = phase_stats.get(p, {})
+            try:
+                st_obj = global_stats.phases.get(p)
+                if not st_obj or not getattr(st_obj, 'start_time', None):
+                    continue
+                start = st_obj.start_time
+                end = st_obj.end_time or datetime.now()
+                border_count = 0
+                for n in nodes:
+                    if not getattr(n, 'isborder', False):
+                        continue
+                    logs = getattr(n, 'logs', [])
+                    for entry in logs:
+                        try:
+                            ts = datetime.strptime(entry.get('timestamp', ''), "%Y-%m-%d %H:%M:%S.%f")
+                        except Exception:
+                            continue
+                        if ts >= start and ts <= end and 'border_interest_hops increment' in entry.get('message', ''):
+                            border_count += 1
+                if border_count > 0:
+                    penalty_ms = border_count * 10
+                    s['avg_latency_ms'] = s.get('avg_latency_ms', 0.0) + penalty_ms
+                    # Adjust per-phase min/max to reflect applied penalty as well
+                    s['max_latency_ms'] = s.get('max_latency_ms', 0.0) + penalty_ms
+                    s['min_latency_ms'] = s.get('min_latency_ms', 0.0) + penalty_ms
+                    # Recompute throughput for the phase after penalty
+                    avg_s = s['avg_latency_ms'] / 1000.0 if s['avg_latency_ms'] > 0 else 0
+                    s['throughput_bps'] = s.get('total_data_bits', 0) / avg_s if avg_s > 0 else 0
+                    s['throughput_kbps'] = s['throughput_bps'] / 1000
+                    s['border_hop_penalty'] = border_count
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Get base combined stats, but override latency metrics using the
+    # already-computed per-phase latencies (now adjusted) to avoid re-sampling jitter.
     combined = global_stats.get_statistics()
+    try:
+        total_completed = sum((phase_stats[p].get('completed_pairs', 0) for p in phase_stats))
+        if total_completed > 0:
+            # Weighted average of per-phase average latencies (ms)
+            total_latency_ms = sum((phase_stats[p].get('avg_latency_ms', 0.0) * phase_stats[p].get('completed_pairs', 0) for p in phase_stats))
+            combined['avg_latency_ms'] = total_latency_ms / total_completed
+            # pick extreme values across phases
+            phase_maxes = [phase_stats[p].get('max_latency_ms', 0.0) for p in phase_stats if phase_stats[p].get('completed_pairs', 0) > 0]
+            phase_mins = [phase_stats[p].get('min_latency_ms', 0.0) for p in phase_stats if phase_stats[p].get('completed_pairs', 0) > 0]
+            if phase_maxes:
+                combined['max_latency_ms'] = max(phase_maxes)
+            if phase_mins:
+                combined['min_latency_ms'] = min(phase_mins)
+            combined['completed_pairs'] = total_completed
+            # Recompute throughput based on the combined avg latency (seconds)
+            avg_latency_s = combined['avg_latency_ms'] / 1000.0
+            combined['throughput_bps'] = combined['total_data_bits'] / avg_latency_s if avg_latency_s > 0 else 0
+            combined['throughput_kbps'] = combined['throughput_bps'] / 1000
+    except Exception:
+        pass
+    # (No combined-level border-hop penalty here — per-phase penalties applied above.)
 
     print("\n" + "="*80)
     print("NETWORK PERFORMANCE STATISTICS (PER PHASE)")
