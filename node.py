@@ -2254,7 +2254,14 @@ class Node:
                         print(f"[{self.name}] (pre-NS) Destination {parsed['Name']} is a direct neighbor {node_name} at port {neighbor_port}, forwarding directly (real interest).")
                         self.log(f"[{self.name}] (pre-NS) Destination {parsed['Name']} is a direct neighbor {node_name} at port {neighbor_port}, forwarding directly (real interest).")
                         pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
-                        self.sock.sendto(pkt, ("127.0.0.1", int(neighbor_port)))
+                        try:
+                            # ensure border outgoing counts are recorded when forwarding directly
+                            try:
+                                self._maybe_count_border_interest_outgoing(pkt)
+                            except Exception:
+                                pass
+                        finally:
+                            self.sock.sendto(pkt, ("127.0.0.1", int(neighbor_port)))
                         return
                     # Insert error packet logic: if this node is the target and file not found in CS, return error
                     if node_name == self.name and has_filename and file_name:
