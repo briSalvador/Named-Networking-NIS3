@@ -808,7 +808,6 @@ class Node:
                     with self._border_hop_lock:
                         self.border_interest_hops += 1
                         _new = self.border_interest_hops
-                    print(f"[{self.name}] [DEBUG] border_interest_hops increment (outgoing helper) name={parsed.get('Name')} seq={parsed.get('SequenceNumber')} new_count={_new}")
                     self.log(f"[DEBUG] border_interest_hops increment (outgoing helper) name={parsed.get('Name')} seq={parsed.get('SequenceNumber')} new_count={_new}")
             except Exception:
                 pass
@@ -1615,7 +1614,6 @@ class Node:
                         pname = parsed.get('Name')
                     except Exception:
                         pname = None
-                    print(f"[{self.name}] [DEBUG] border_interest_hops increment (receive_interest) name={pname} seq={parsed.get('SequenceNumber')} from_port={addr[1] if addr else None} new_count={_new_cnt}")
                     self.log(f"[DEBUG] border_interest_hops increment (receive_interest) name={pname} seq={parsed.get('SequenceNumber')} from_port={addr[1] if addr else None} new_count={_new_cnt}")
             except Exception:
                 pass
