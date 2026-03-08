@@ -808,6 +808,7 @@ class Node:
                     with self._border_hop_lock:
                         self.border_interest_hops += 1
                         _new = self.border_interest_hops
+                    print(f"[{self.name}] [DEBUG] border_interest_hops increment (outgoing helper) name={parsed.get('Name')} seq={parsed.get('SequenceNumber')} new_count={_new}")
                     self.log(f"[DEBUG] border_interest_hops increment (outgoing helper) name={parsed.get('Name')} seq={parsed.get('SequenceNumber')} new_count={_new}")
             except Exception:
                 pass
@@ -1604,17 +1605,19 @@ class Node:
         if packet_type == INTEREST:
             parsed = parse_interest_packet(packet)
             # If this node is a border router, count this incoming interest hop
+            # but do not count the initialization reception when this node
+            # is the origin of the Interest (that would be counted when
+            # the node sends the Interest).
             try:
                 if getattr(self, 'isborder', False):
-                    with self._border_hop_lock:
-                        self.border_interest_hops += 1
-                        _new_cnt = self.border_interest_hops
-                    # Debug output for incoming increment
-                    try:
-                        pname = parsed.get('Name')
-                    except Exception:
-                        pname = None
-                    self.log(f"[DEBUG] border_interest_hops increment (receive_interest) name={pname} seq={parsed.get('SequenceNumber')} from_port={addr[1] if addr else None} new_count={_new_cnt}")
+                    origin = parsed.get('OriginNode')
+                    if origin != self.name:
+                        with self._border_hop_lock:
+                            self.border_interest_hops += 1
+                            _new_cnt = self.border_interest_hops
+                        pname = parsed.get('Name') if isinstance(parsed, dict) else None
+                        # Keep a compact log entry for attribution (no noisy prints)
+                        self.log(f"[DEBUG] border_interest_hops increment (receive_interest) name={pname} seq={parsed.get('SequenceNumber')} from_port={addr[1] if addr else None} new_count={_new_cnt}")
             except Exception:
                 pass
             # Only record an interest hop for "real" interests (DataFlag==True).
