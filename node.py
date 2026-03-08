@@ -745,6 +745,10 @@ class Node:
         self.fib = {} # {name: {"NextHops": [port, ...], "ExpirationTime": ...}}
         self.cs = {}
         self.logs = []  # List to store log entries
+        # Border interest hop counting (increment whenever a border router
+        # sends or receives an INTEREST packet hop)
+        self.border_interest_hops = 0
+        self._border_hop_lock = threading.Lock()
         # map of destination name -> list of incoming ports that sent NS-QUERY (data_flag=False)
         # so that ROUTING_DATA replies from the NameServer can be forwarded back to the requester(s)
         self.ns_query_table = {}
@@ -789,6 +793,28 @@ class Node:
         except Exception:
             pass
         return None
+
+    def _maybe_count_border_interest_outgoing(self, pkt_bytes):
+        """
+        Inspect `pkt_bytes` and increment `border_interest_hops` if this node
+        is a border and the packet is an INTEREST. We count every outgoing
+        INTEREST hop observed at a border router (regardless of origin).
+        Safe to call on arbitrary packets; parsing errors are ignored.
+        """
+        try:
+            parsed = parse_interest_packet(pkt_bytes)
+            try:
+                if getattr(self, 'isborder', False):
+                    with self._border_hop_lock:
+                        self.border_interest_hops += 1
+                        _new = self.border_interest_hops
+                    print(f"[{self.name}] [DEBUG] border_interest_hops increment (outgoing helper) name={parsed.get('Name')} seq={parsed.get('SequenceNumber')} new_count={_new}")
+                    self.log(f"[DEBUG] border_interest_hops increment (outgoing helper) name={parsed.get('Name')} seq={parsed.get('SequenceNumber')} new_count={_new}")
+            except Exception:
+                pass
+        except Exception:
+            # not an INTEREST or malformed — ignore
+            pass
 
     def _record_packet_stat(self, packet):
         try:
@@ -975,6 +1001,10 @@ class Node:
                         nh = self.get_next_hops(dest)
                         if nh:
                             target_port = nh
+                            try:
+                                self._maybe_count_border_interest_outgoing(entry["packet"])
+                            except Exception:
+                                pass
                             self.sock.sendto(entry["packet"], ("127.0.0.1", int(target_port)))
                             forwarded.append(entry)
                             with self.buffer_lock:
@@ -1307,6 +1337,11 @@ class Node:
         # self.log(f"[{self.name}] Buffered originated interest for '{name}' -> {resolved_target}")
         # print(f"[{self.name}] Buffered originated interest for '{name}' -> {resolved_target}")
         #self.log(f"Sent NS QUERY seq={seq_num} '{name}' -> {resolved_target}")
+        # count via helper (handles origin check / debug)
+        try:
+            self._maybe_count_border_interest_outgoing(query_pkt)
+        except Exception:
+            pass
         self.sock.sendto(query_pkt, ("127.0.0.1", self.port))
         # try:
         #     # record originated interest
@@ -1424,6 +1459,11 @@ class Node:
                                          pkt_obj.flags,
                                          origin_node=getattr(pkt_obj, 'origin_node', self.name),
                                          data_flag=True)
+            # count via helper (handles origin check / debug)
+            try:
+                self._maybe_count_border_interest_outgoing(pkt)
+            except Exception:
+                pass
             self.sock.sendto(pkt, ("127.0.0.1", int(port)))
             print(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
             self.log(f"[{self.name}] Forwarded INTEREST packet for {pkt_obj.name} to next hop port {port}")
@@ -1434,6 +1474,11 @@ class Node:
                                          pkt_obj.flags,
                                          origin_node=getattr(pkt_obj, 'origin_node', self.name),
                                          data_flag=True)
+            # count via helper (handles origin check / debug)
+            try:
+                self._maybe_count_border_interest_outgoing(pkt)
+            except Exception:
+                pass
             self.sock.sendto(pkt, target)
             print(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
             self.log(f"[{self.name}] Forwarded INTEREST packet to next hop port {target[1]}")
@@ -1559,6 +1604,21 @@ class Node:
 
         if packet_type == INTEREST:
             parsed = parse_interest_packet(packet)
+            # If this node is a border router, count this incoming interest hop
+            try:
+                if getattr(self, 'isborder', False):
+                    with self._border_hop_lock:
+                        self.border_interest_hops += 1
+                        _new_cnt = self.border_interest_hops
+                    # Debug output for incoming increment
+                    try:
+                        pname = parsed.get('Name')
+                    except Exception:
+                        pname = None
+                    print(f"[{self.name}] [DEBUG] border_interest_hops increment (receive_interest) name={pname} seq={parsed.get('SequenceNumber')} from_port={addr[1] if addr else None} new_count={_new_cnt}")
+                    self.log(f"[DEBUG] border_interest_hops increment (receive_interest) name={pname} seq={parsed.get('SequenceNumber')} from_port={addr[1] if addr else None} new_count={_new_cnt}")
+            except Exception:
+                pass
             # Only record an interest hop for "real" interests (DataFlag==True).
             # Name-server queries (DataFlag==False) should not be counted
             # in the Interest/Data path statistics.
@@ -1763,6 +1823,10 @@ class Node:
                                     except Exception as e:
                                         self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
 
+                                    try:
+                                        self._maybe_count_border_interest_outgoing(forward_pkt)
+                                    except Exception:
+                                        pass
                                     self.sock.sendto(forward_pkt, ("127.0.0.1", int(ns_port)))
                                     print(f"[{self.name}] Forwarded interdomain interest for {parsed['Name']} → {target_ns} (port {ns_port})")
                                     self.log(f"[{self.name}] Forwarded interdomain interest → {target_ns} with visited={visited}")
@@ -1793,6 +1857,10 @@ class Node:
                                         data_flag=False,
                                         visited_domains=list(visited)
                                     )
+                                    try:
+                                        self._maybe_count_border_interest_outgoing(query_pkt)
+                                    except Exception:
+                                        pass
                                     self.sock.sendto(query_pkt, ("127.0.0.1", int(own_ns_port)))
                                     print(f"[{self.name}] Asked own NS {own_ns} for location of {target_ns}")
                                     self.log(f"[{self.name}] Asked own NS {own_ns} for target NS {target_ns}")
@@ -1830,6 +1898,10 @@ class Node:
                             except Exception as e:
                                 self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
                             
+                            try:
+                                self._maybe_count_border_interest_outgoing(packet)
+                            except Exception:
+                                pass
                             self.sock.sendto(packet, ("127.0.0.1", target_port))
                             #self.ns_query_table[parsed["Name"]].append({"port": addr[1], "ack_only": False})
                             return
@@ -1867,6 +1939,10 @@ class Node:
                                             print(f"[{self.name}] Registered ack-only NS query for full ENCAP name {full_key} from iface {addr[1]}")
                                 except Exception as e:
                                     self.log(f"[{self.name}] Error recording full ENCAP name in ns_query_table: {e}")
+                                try:
+                                    self._maybe_count_border_interest_outgoing(packet)
+                                except Exception:
+                                    pass
                                 self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
                                 self.log(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
                                 print(f"[{self.name}] Routed INTEREST with 0x1 flag to local NameServer {ns_name} at port {ns_port}")
@@ -1899,6 +1975,10 @@ class Node:
                             query_pkt = create_interest_packet(parsed["SequenceNumber"], enc_border, parsed["Flags"], origin_node=self.name, data_flag=False)
                             self.log(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
                             print(f"[{self.name}] Sent NS QUERY for border {enc_border} -> {ns_name} (via port {ns_port})")
+                            try:
+                                self._maybe_count_border_interest_outgoing(query_pkt)
+                            except Exception:
+                                pass
                             self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
                     
                             try:
@@ -1984,6 +2064,10 @@ class Node:
                     print(f"[{self.name}] ({role}) Destination {node_name} is a direct neighbor node at port {neighbor_port}, forwarding file '{file_name}' directly.")
                     self.log(f"[{self.name}] ({role}) Destination {node_name} is a direct neighbor node at port {neighbor_port}, forwarding file '{file_name}' directly.")
                     pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=parsed["OriginNode"], data_flag=True)
+                    try:
+                        self._maybe_count_border_interest_outgoing(pkt)
+                    except Exception:
+                        pass
                     self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
                     return
                 else:
@@ -2077,6 +2161,10 @@ class Node:
                     if fib_entry:
                         ns_port = fib_entry["NextHops"]
                         try:
+                            try:
+                                self._maybe_count_border_interest_outgoing(packet)
+                            except Exception:
+                                pass
                             self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
                             self.log(f"[{self.name}] Forwarded NS QUERY for {parsed['Name']} -> {ns_name} (via port {ns_port}) origin={origin_node}")
                         except Exception as e:
@@ -2118,6 +2206,10 @@ class Node:
                             neighbor_port = self.name_to_port.get(neighbor_name)
                             if neighbor_port:
                                 try:
+                                    try:
+                                        self._maybe_count_border_interest_outgoing(pkt)
+                                    except Exception:
+                                        pass
                                     self.sock.sendto(pkt, ("127.0.0.1", neighbor_port))
                                     self.log(f"[{self.name}] FORWARDED QUERY -> neighbor {neighbor_name} (port {neighbor_port}) for {parsed['Name']}")
                                     print(f"[{self.name}] Forwarded QUERY for {parsed['Name']} to neighbor {neighbor_name} at port {neighbor_port}")
@@ -2214,6 +2306,10 @@ class Node:
                                     parsed["SequenceNumber"], parsed["Name"], parsed["Flags"],
                                     origin_node=self.name, data_flag=False
                                 )
+                                try:
+                                    self._maybe_count_border_interest_outgoing(query_pkt)
+                                except Exception:
+                                    pass
                                 self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
                                 print(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
                                 self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} -> {ns_name} via port {ns_port}")
@@ -2283,6 +2379,10 @@ class Node:
                                         origin_node=self.name,
                                         data_flag=False
                                     )
+                                    try:
+                                        self._maybe_count_border_interest_outgoing(pkt)
+                                    except Exception:
+                                        pass
                                     self.sock.sendto(pkt, ("127.0.0.1", int(target_ns_port)))
                                     print(f"[{self.name}] BORDER NS QUERY → {target_ns} for {parsed['Name']}")
                                     self.log(f"[{self.name}] BORDER NS QUERY → {target_ns} for {parsed['Name']}")
@@ -2316,6 +2416,10 @@ class Node:
                                         origin_node=self.name,
                                         data_flag=False
                                     )
+                                    try:
+                                        self._maybe_count_border_interest_outgoing(pkt)
+                                    except Exception:
+                                        pass
                                     self.sock.sendto(pkt, ("127.0.0.1", int(alt_ns_port)))
                                     print(f"[{self.name}] BORDER NS QUERY → {alt_ns} for {parsed['Name']}")
                                     self.log(f"[{self.name}] BORDER NS QUERY → {alt_ns} for {parsed['Name']}")
@@ -2391,6 +2495,10 @@ class Node:
                             if ns_port:
                                 try:
                                     query_pkt = create_interest_packet(parsed["SequenceNumber"], parsed["Name"], parsed["Flags"], origin_node=self.name, data_flag=False)
+                                    try:
+                                        self._maybe_count_border_interest_outgoing(query_pkt)
+                                    except Exception:
+                                        pass
                                     self.sock.sendto(query_pkt, ("127.0.0.1", int(ns_port)))
                                     self.log(f"[{self.name}] Sent NS QUERY for {parsed['Name']} (origin={self.name}) -> {ns_name} via port {ns_port} due to FIB loop avoidance")
                                     with self.buffer_lock:
@@ -2677,6 +2785,10 @@ class Node:
                         ns_port = fib_entry.get("NextHops")
                 if ns_port:
                     try:
+                        try:
+                            self._maybe_count_border_interest_outgoing(packet)
+                        except Exception:
+                            pass
                         self.sock.sendto(packet, ("127.0.0.1", int(ns_port)))
                         self.log(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to own NS {ns_name} at port {ns_port}")
                         print(f"[{self.name}] Forwarded ROUTE_ACK for {dest_name} to own NS {ns_name} at port {ns_port}")
@@ -2771,6 +2883,10 @@ class Node:
                         forward_pkt = create_neighbor_update_packet(combined_node_name, combined_neighbor_name)
 
                         # Send packet to this domain's NameServer
+                        try:
+                            self._maybe_count_border_interest_outgoing(forward_pkt)
+                        except Exception:
+                            pass
                         self.sock.sendto(forward_pkt, ("127.0.0.1", int(ns_port)))
 
                         print(f"[{self.name}] Forwarded NEIGHBOR UPDATE to {ns_name} (port {ns_port}) "
@@ -2890,6 +3006,10 @@ class Node:
                                     # send the REAL_INTEREST directly to next-hop toward destination
                                     self.log(f"[{self.name}] Immediately forwarded resolved REAL_INTEREST for {dest} to port {target_port}")
                                     print(f"[{self.name}] Immediately forwarded resolved REAL_INTEREST for {dest} to port {target_port}")
+                                    try:
+                                        self._maybe_count_border_interest_outgoing(pkt)
+                                    except Exception:
+                                        pass
                                     self.sock.sendto(pkt, ("127.0.0.1", target_port))
                                 # remove from buffer now that we forwarded
                                 with self.buffer_lock:

@@ -1361,6 +1361,20 @@ def print_network_statistics():
     else:
         print(f"  Total Hops:             {combined['total_hops']-combined['packet_counts'].get('INTEREST')} hops")
 
+    # Border routers: print per-node and total border interest hops
+    try:
+        border_nodes = [n for n in nodes if getattr(n, 'isborder', False)]
+        if border_nodes:
+            total_border_hops = 0
+            print("\n[BORDER INTEREST HOPS]")
+            for bn in border_nodes:
+                hops = getattr(bn, 'border_interest_hops', 0)
+                total_border_hops += hops
+                print(f"  {getattr(bn, 'name', 'unknown')}: {hops} hops")
+            print(f"  Total Border Interest Hops: {total_border_hops} hops")
+    except Exception:
+        pass
+
     print("\n" + "="*80)
 
 """
