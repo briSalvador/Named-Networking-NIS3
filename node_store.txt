@@ -1,2 +1,0 @@
-NodeB: ("sensor/data", "Temperature: 28C")
-NodeC: ("sensor/data", "Temperature: 28C")
