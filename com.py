@@ -1083,13 +1083,10 @@ class DebugController:
         print("""
 [DEBUG COMMANDS]
   list                             - show all nodes
-  select <node_name>               - zoom into a node
-  run <test_id>                    - execute a test (1-5)
   addcs <node> <name> <data>       - add a CS entry
   interest <origin> <name> [seq]   - send Interest
   filter <names...>                - logs for listed nodes
   help                             - show this menu
-  exit                             - quit debugging
         """)
 
     def process_command(self, cmd):
